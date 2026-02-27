@@ -1,21 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
 .home {
-  color: white;
-  animation: fadeIn 0.6s ease-in;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  color: #1e293b; /* text-charcoal */
+  background: #f8fafc;
+  min-height: 100vh;
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.mesh-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  opacity: 0.6;
+  background-image:
+    radial-gradient(at 0% 0%, hsla(210, 100%, 95%, 1) 0, transparent 50%),
+    radial-gradient(at 50% 0%, hsla(260, 100%, 96%, 1) 0, transparent 50%),
+    radial-gradient(at 100% 0%, hsla(210, 100%, 94%, 1) 0, transparent 50%);
+}
+
+.accent-text-gradient {
+  background: linear-gradient(to right, #0062ff, #7c3aed);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .hero {
-  text-align: center;
   padding: 4rem 0 3rem;
   position: relative;
 }
@@ -24,13 +38,7 @@
   font-size: clamp(2.5rem, 5vw, 4.5rem);
   margin-bottom: 1.5rem;
   font-weight: 800;
-  background: linear-gradient(135deg, #ffffff 0%, #f0f0f0 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  text-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  line-height: 1.2;
-  animation: slideDown 0.8s ease-out;
+  line-height: 1.1;
 }
 
 @keyframes slideDown {
