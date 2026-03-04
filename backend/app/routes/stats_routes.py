@@ -78,9 +78,19 @@ async def get_monthly_timeline(db: Session = Depends(get_db)):
     """
     Get monthly prediction statistics for dashboard charts.
     Groups all predictions by month and returns total and spam counts.
+    Database-agnostic: works for both PostgreSQL and SQLite.
     """
-    # Use date_trunc for Postgres month buckets
-    month_column = func.date_trunc("month", Prediction.created_at).label("month")
+    # Detect database dialect
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind is not None else ""
+
+    # Use date_trunc for Postgres, strftime for SQLite
+    if dialect == "sqlite":
+        # SQLite: strftime returns string "YYYY-MM-01"
+        month_column = func.strftime("%Y-%m-01", Prediction.created_at).label("month")
+    else:
+        # PostgreSQL (and others that support date_trunc)
+        month_column = func.date_trunc("month", Prediction.created_at).label("month")
 
     rows = (
         db.query(
@@ -98,8 +108,12 @@ async def get_monthly_timeline(db: Session = Depends(get_db)):
     result = []
     for row in rows:
         month_value = row.month
-        # month_value is a datetime from date_trunc; format to a stable YYYY-MM-01 string
-        month_str = month_value.strftime("%Y-%m-01") if month_value is not None else ""
+        # For Postgres, month_value is a datetime from date_trunc.
+        # For SQLite, month_value is already a string from strftime.
+        if dialect == "sqlite":
+            month_str = month_value or ""
+        else:
+            month_str = month_value.strftime("%Y-%m-01") if month_value is not None else ""
         result.append(
             {
                 "month": month_str,
@@ -123,7 +137,22 @@ async def get_timeline(db: Session = Depends(get_db), range: str = "month", limi
     if limit < 1 or limit > 365:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 365")
 
-    bucket_col = func.date_trunc(unit, Prediction.created_at).label("bucket")
+    # Detect database dialect
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind is not None else ""
+
+    # Build bucket column depending on database
+    if dialect == "sqlite":
+        # SQLite: use strftime (returns string)
+        if unit == "day":
+            bucket_col = func.strftime("%Y-%m-%d", Prediction.created_at).label("bucket")
+        elif unit == "year":
+            bucket_col = func.strftime("%Y", Prediction.created_at).label("bucket")
+        else:  # month
+            bucket_col = func.strftime("%Y-%m", Prediction.created_at).label("bucket")
+    else:
+        # PostgreSQL (and others that support date_trunc)
+        bucket_col = func.date_trunc(unit, Prediction.created_at).label("bucket")
 
     rows = (
         db.query(
@@ -144,12 +173,16 @@ async def get_timeline(db: Session = Depends(get_db), range: str = "month", limi
     out = []
     for r in rows:
         dt = r.bucket
-        if unit == "day":
-            label = dt.strftime("%Y-%m-%d") if dt else ""
-        elif unit == "year":
-            label = dt.strftime("%Y") if dt else ""
+        # For SQLite, dt is already string from strftime; for Postgres it's datetime
+        if dialect == "sqlite":
+            label = dt or ""
         else:
-            label = dt.strftime("%Y-%m") if dt else ""
+            if unit == "day":
+                label = dt.strftime("%Y-%m-%d") if dt else ""
+            elif unit == "year":
+                label = dt.strftime("%Y") if dt else ""
+            else:
+                label = dt.strftime("%Y-%m") if dt else ""
 
         out.append(
             {

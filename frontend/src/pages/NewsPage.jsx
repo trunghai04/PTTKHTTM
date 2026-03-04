@@ -23,6 +23,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../api/client';
 import Navbar from '../components/Navbar';
+import { useNavigate } from 'react-router-dom';
 
 export default function App() {
   const [inputText, setInputText] = useState('');
@@ -30,6 +31,9 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState([]);
   const [error, setError] = useState(null);
+  const navigate = useNavigate();
+
+  const isLoggedIn = !!localStorage.getItem('access_token');
 
   const wordCount = useMemo(() => {
     return inputText.trim() ? inputText.trim().split(/\s+/).length : 0;
@@ -37,6 +41,11 @@ export default function App() {
 
   const fetchNewsHistory = async () => {
     try {
+      if (!isLoggedIn) {
+        // Khách: không gọi API, lịch sử chỉ tồn tại trong state
+        setHistory([]);
+        return;
+      }
       const res = await api.get('/api/news/history', { params: { limit: 50 } });
       const mapped = (res.data || []).map((item) => ({
         id: item.id,
@@ -59,8 +68,13 @@ export default function App() {
 
   const clearHistory = async () => {
     try {
-      await api.delete('/api/news/history');
-      await fetchNewsHistory();
+      if (isLoggedIn) {
+        await api.delete('/api/news/history');
+        await fetchNewsHistory();
+      } else {
+        // Khách: chỉ xóa lịch sử tạm thời trong state
+        setHistory([]);
+      }
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.detail || 'Không thể xóa lịch sử');
@@ -88,7 +102,21 @@ export default function App() {
           { label: 'Khác', percentage: otherPercent, color: 'bg-slate-300' },
         ],
       });
-      await fetchNewsHistory();
+      if (isLoggedIn) {
+        await fetchNewsHistory();
+      } else {
+        // Khách: cập nhật lịch sử tạm thời trong phiên hiện tại
+        const preview = (inputText || '').substring(0, 100) + ((inputText || '').length > 100 ? '...' : '');
+        const time = new Date().toLocaleString('vi-VN');
+        const item = {
+          id: Date.now(),
+          topic: label || 'Other',
+          preview,
+          time,
+          verified: false,
+        };
+        setHistory((prev) => [item, ...prev].slice(0, 50));
+      }
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.detail || 'Có lỗi khi gọi API phân loại tin tức');
@@ -122,7 +150,7 @@ export default function App() {
                   )}
                   <div className="flex items-center gap-2 px-4 py-2 bg-white/60 border border-slate-100 rounded-2xl shadow-sm">
                     <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                    <span className="text-[11px] font-bold text-slate-600">Động cơ: <span className="text-blue-600">GPT-Neural-4</span></span>
+                    <span className="text-[11px] font-bold text-slate-600">Model: <span className="text-blue-600">GPT-Neural-4</span></span>
                   </div>
                 </div>
 
@@ -298,7 +326,17 @@ export default function App() {
 
               <div className="space-y-4 overflow-y-auto custom-scrollbar pr-2 flex-grow">
                 {history.length === 0 && (
-                  <p className="text-xs text-slate-400">Chưa có bản ghi.</p>
+                  isLoggedIn ? (
+                    <p className="text-xs text-slate-400">Chưa có bản ghi.</p>
+                  ) : (
+                    <div className="space-y-1 text-xs text-slate-400">
+                      <p>Chưa có bản ghi.</p>
+                      <p className="text-[11px]">
+                        <span className="font-semibold text-slate-600">Chưa đăng nhập:</span>{' '}
+                        lịch sử chỉ lưu tạm thời. Đăng nhập để giữ lịch sử lâu dài.
+                      </p>
+                    </div>
+                  )
                 )}
                 {history.map((item) => (
                   <motion.div 
@@ -306,6 +344,11 @@ export default function App() {
                     layout
                     initial={{ opacity: 0, x: 20 }}
                     animate={{ opacity: 1, x: 0 }}
+                    onClick={() =>
+                      navigate('/news/detail', {
+                        state: { entry: item },
+                      })
+                    }
                     className="group p-5 bg-white border border-slate-100 rounded-3xl cursor-pointer relative overflow-hidden shadow-sm hover:translate-y-[-4px] hover:bg-slate-50/50 transition-all"
                   >
                     <div className="flex justify-between items-start mb-3">

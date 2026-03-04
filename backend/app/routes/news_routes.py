@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+from app.auth.deps import get_current_user, get_optional_user
 from app.database.db import get_db
-from app.database.models import Prediction, PredictionType
+from app.database.models import Prediction, PredictionType, User
 from app.services.news_service import news_classifier
 
 router = APIRouter()
@@ -16,14 +18,18 @@ class NewsBulkRequest(BaseModel):
 class NewsResponse(BaseModel):
     label: str
     confidence: float
-    id: int = None
+    id: int | None = None
 
 class NewsBulkResponse(BaseModel):
     results: list[NewsResponse]
     total: int
 
 @router.post("/predict", response_model=NewsResponse)
-async def predict_news(request: NewsRequest, db: Session = Depends(get_db)):
+async def predict_news(
+    request: NewsRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
     """
     Predict news category
     """
@@ -34,13 +40,15 @@ async def predict_news(request: NewsRequest, db: Session = Depends(get_db)):
         # Get prediction
         result = news_classifier.predict(request.text)
         
-        # Save to database (with error handling)
+        # Save to database (with error handling). If user is logged in, attach user_id.
         try:
             prediction = Prediction(
                 text=request.text,
                 type=PredictionType.NEWS,
                 predicted_label=result["label"],
-                confidence=result["confidence"]
+                confidence=result["confidence"],
+                user_id=user.id if user else None,
+                source="manual",
             )
             db.add(prediction)
             db.commit()
@@ -71,7 +79,11 @@ async def predict_news(request: NewsRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Prediction failed: {error_msg}")
 
 @router.post("/predict/bulk", response_model=NewsBulkResponse)
-async def predict_news_bulk(request: NewsBulkRequest, db: Session = Depends(get_db)):
+async def predict_news_bulk(
+    request: NewsBulkRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
     """
     Bulk news prediction. Saves each prediction to DB when available.
     """
@@ -95,6 +107,8 @@ async def predict_news_bulk(request: NewsBulkRequest, db: Session = Depends(get_
                     type=PredictionType.NEWS,
                     predicted_label=result["label"],
                     confidence=result["confidence"],
+                    user_id=user.id if user else None,
+                    source="manual",
                 )
                 db.add(prediction)
                 db.commit()
@@ -127,24 +141,41 @@ async def predict_news_bulk(request: NewsBulkRequest, db: Session = Depends(get_
         raise HTTPException(status_code=500, detail=f"Bulk prediction failed: {error_msg}")
 
 @router.get("/history")
-async def get_news_history(db: Session = Depends(get_db), limit: int = 50):
+async def get_news_history(
+    db: Session = Depends(get_db),
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+):
     """
-    Get news prediction history
+    Get news prediction history for the current authenticated user.
     """
-    predictions = db.query(Prediction).filter(
-        Prediction.type == PredictionType.NEWS
-    ).order_by(Prediction.created_at.desc()).limit(limit).all()
-    
+    predictions = (
+        db.query(Prediction)
+        .filter(
+            Prediction.type == PredictionType.NEWS,
+            Prediction.user_id == user.id,
+        )
+        .order_by(Prediction.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
     return [pred.to_dict() for pred in predictions]
 
 @router.delete("/history")
-async def clear_news_history(db: Session = Depends(get_db)):
+async def clear_news_history(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """
-    Delete all news predictions.
+    Delete all news predictions for the current authenticated user.
     """
     deleted = (
         db.query(Prediction)
-        .filter(Prediction.type == PredictionType.NEWS)
+        .filter(
+            Prediction.type == PredictionType.NEWS,
+            Prediction.user_id == user.id,
+        )
         .delete(synchronize_session=False)
     )
     db.commit()

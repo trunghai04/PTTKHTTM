@@ -12,8 +12,8 @@ import {
   Pie,
 } from 'recharts';
 import {
-  Activity,
-  Shield,
+  TrendingUp,
+  ShieldAlert,
   Newspaper,
   CheckCircle2,
   Settings2,
@@ -27,31 +27,65 @@ const cn = (...classes) => classes.filter(Boolean).join(' ');
 
 // --- Components ---
 
-const StatCard = ({ title, value, change, isPositive, icon, iconBg, iconColor, sparklinePoints, sparklineColor }) => (
+const StatCard = ({
+  title,
+  value,
+  trend = 'up', // 'up' | 'down' | 'stable'
+  trendValue,
+  icon,
+  iconBg,
+  iconColor,
+  sparklinePoints,
+  sparklineColor,
+}) => {
+  const trendColor =
+    trend === 'up'
+      ? 'text-emerald-500'
+      : trend === 'down'
+      ? 'text-rose-500'
+      : 'text-slate-500';
+
+  const Icon = icon;
+
+  return (
   <motion.div 
-    initial={{ opacity: 0, y: 20 }}
+    initial={{ opacity: 0, y: 14 }}
     animate={{ opacity: 1, y: 0 }}
-    className="glass-card p-6 rounded-[2rem] flex flex-col justify-between"
+    className="bg-white/95 backdrop-blur-md shadow-[0_14px_30px_rgba(15,23,42,0.08)] px-5 py-4 rounded-3xl flex flex-col justify-between"
   >
-    <div className="flex justify-between items-start mb-4">
-      <div className={cn("p-3 rounded-2xl shadow-sm", iconBg, iconColor)}>
-        {icon}
+    <div className="flex justify-between items-start mb-3">
+      <div className={cn("p-2.5 rounded-2xl shadow-sm", iconBg, iconColor)}>
+        {Icon && <Icon className="w-6 h-6" />}
       </div>
-      <svg className={cn("sparkline", sparklineColor)}>
-        <polyline points={sparklinePoints} />
+      <svg
+        width="72"
+        height="22"
+        viewBox="0 0 80 30"
+        fill="none"
+        className="mt-1"
+      >
+        <polyline
+          points={sparklinePoints}
+          fill="none"
+          stroke={sparklineColor}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </svg>
     </div>
     <div>
-      <p className="text-sm font-semibold text-slate-500">{title}</p>
-      <div className="flex items-baseline gap-2">
-        <h2 className="text-3xl font-bold text-slate-900">{value}</h2>
-        <span className={cn("text-xs font-bold", isPositive ? "text-emerald-500" : "text-rose-500")}>
-          {change}
+      <p className="text-xs font-semibold text-slate-500">{title}</p>
+      <div className="flex items-baseline gap-2 mt-1">
+        <h2 className="text-2xl font-bold text-slate-900">{value}</h2>
+        <span className={cn("text-xs font-bold", trendColor)}>
+          {trendValue}
         </span>
       </div>
     </div>
   </motion.div>
 );
+};
 
 const ProgressBar = ({ label, value, percentage, color }) => (
   <div>
@@ -141,14 +175,22 @@ export default function App() {
           params: { range: timelineRange, limit: timelineRange === 'day' ? 30 : 12 },
         });
         const rows = res.data || [];
-        const mapped = rows.map((r, idx) => ({
-          name:
-            timelineRange === 'month'
-              ? `Th${String((r.bucket || '').split('-')[1] || '')}`.replace('Th', 'Th')
-              : r.bucket,
-          value: r.news_total ?? r.total ?? 0,
-          active: idx === rows.length - 1,
-        }));
+        const mapped = rows.map((r, idx) => {
+          const bucket = r.bucket || '';
+          let label = bucket;
+          if (timelineRange === 'month' && bucket.includes('-')) {
+            const parts = bucket.split('-');
+            const monthPart = parts[1] || '';
+            label = `Th${monthPart}`;
+          }
+          return {
+            name: label,
+            total: r.total ?? 0,
+            news: r.news_total ?? 0,
+            spam: r.spam_total ?? 0,
+            active: idx === rows.length - 1,
+          };
+        });
         setMonthlyData(mapped);
       } catch (e) {
         console.error(e);
@@ -166,6 +208,40 @@ export default function App() {
   const avgConf = stats?.average_confidence ?? 0;
   const spamRate = totalPred ? Math.round((spamTotal / totalPred) * 100) : 0;
   const avgConfPercent = Math.round(avgConf * 1000) / 10;
+
+  const rangeNewsTotal = monthlyData.reduce((sum, item) => sum + (item.news || 0), 0);
+  const rangeSpamTotal = monthlyData.reduce((sum, item) => sum + (item.spam || 0), 0);
+  const rangeTotal = rangeNewsTotal + rangeSpamTotal;
+
+  // --- Trend calculations based on last vs previous bucket in timeline ---
+  const lastPoint = monthlyData.length >= 1 ? monthlyData[monthlyData.length - 1] : null;
+  const prevPoint = monthlyData.length >= 2 ? monthlyData[monthlyData.length - 2] : null;
+
+  const calcChange = (current, previous) => {
+    if (current == null || previous == null || previous === 0) return null;
+    return ((current - previous) / previous) * 100;
+  };
+
+  const totalChange = calcChange(lastPoint?.total, prevPoint?.total);
+
+  const lastSpamRate =
+    lastPoint && lastPoint.total ? (lastPoint.spam / lastPoint.total) * 100 : null;
+  const prevSpamRate =
+    prevPoint && prevPoint.total ? (prevPoint.spam / prevPoint.total) * 100 : null;
+  const spamRateChange = calcChange(lastSpamRate, prevSpamRate);
+
+  const newsChange = calcChange(lastPoint?.news, prevPoint?.news);
+
+  const formatChange = (val) => {
+    if (val == null || Number.isNaN(val)) return '—';
+    const rounded = Math.round(val * 10) / 10;
+    const sign = rounded > 0 ? '+' : '';
+    return `${sign}${rounded}%`;
+  };
+
+  const totalTrend = totalChange == null ? 'stable' : totalChange >= 0 ? 'up' : 'down';
+  const spamTrend = spamRateChange == null ? 'stable' : spamRateChange >= 0 ? 'up' : 'down';
+  const newsTrend = newsChange == null ? 'stable' : newsChange >= 0 ? 'up' : 'down';
 
   return (
     <div className="p-8 text-slate-800">
@@ -199,52 +275,54 @@ export default function App() {
         </header>
 
         {/* Top Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <StatCard 
-            title="Tổng dự đoán"
-            value={loading ? '...' : totalPred.toLocaleString('vi-VN')}
-            change=""
-            isPositive={true}
-            icon={<Activity className="w-6 h-6" />}
-            iconBg="bg-indigo-50"
-            iconColor="text-indigo-600"
-            sparklinePoints="0,20 10,15 20,25 30,10 40,18 50,5 60,15 70,8 80,12"
-            sparklineColor="stroke-indigo-400"
-          />
-          <StatCard 
-            title="Spam đã phát hiện"
-            value={loading ? '...' : `${spamRate}%`}
-            change=""
-            isPositive={false}
-            icon={<Shield className="w-6 h-6" />}
-            iconBg="bg-rose-50"
-            iconColor="text-rose-600"
-            sparklinePoints="0,10 10,25 20,15 30,28 40,12 50,20 60,8 70,18 80,5"
-            sparklineColor="stroke-rose-400"
-          />
-          <StatCard 
-            title="Tin tức đã xử lý"
-            value={loading ? '...' : newsTotal.toLocaleString('vi-VN')}
-            change=""
-            isPositive={true}
-            icon={<Newspaper className="w-6 h-6" />}
-            iconBg="bg-amber-50"
-            iconColor="text-amber-600"
-            sparklinePoints="0,25 15,10 30,20 45,5 60,15 80,10"
-            sparklineColor="stroke-amber-400"
-          />
-          <StatCard 
-            title="Độ tin cậy TB"
-            value={loading ? '...' : `${avgConfPercent}%`}
-            change=""
-            isPositive={true}
-            icon={<CheckCircle2 className="w-6 h-6" />}
-            iconBg="bg-emerald-50"
-            iconColor="text-emerald-600"
-            sparklinePoints="0,15 20,15 40,10 60,10 80,5"
-            sparklineColor="stroke-emerald-400"
-          />
-        </div>
+        <section className="relative rounded-[2.5rem] bg-gradient-to-r from-slate-50 via-white to-slate-50 px-4 py-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard 
+              title="Total Predictions"
+              value={loading ? '...' : totalPred.toLocaleString('en-US')}
+              trend={totalTrend}
+              trendValue={formatChange(totalChange)}
+              icon={TrendingUp}
+              iconBg="bg-indigo-50"
+              iconColor="text-indigo-600"
+              sparklinePoints="0,20 10,15 20,25 30,10 40,18 50,5 60,15 70,8 80,12"
+              sparklineColor="#818cf8"
+            />
+            <StatCard 
+              title="Spam Detected"
+              value={loading ? '...' : `${spamRate}%`}
+              trend={spamTrend}
+              trendValue={formatChange(spamRateChange)}
+              icon={ShieldAlert}
+              iconBg="bg-rose-50"
+              iconColor="text-rose-600"
+              sparklinePoints="0,10 10,25 20,15 30,28 40,12 50,20 60,8 70,18 80,5"
+              sparklineColor="#fb7185"
+            />
+            <StatCard 
+              title="News Processed"
+              value={loading ? '...' : newsTotal.toLocaleString('en-US')}
+              trend={newsTrend}
+              trendValue={formatChange(newsChange)}
+              icon={Newspaper}
+              iconBg="bg-amber-50"
+              iconColor="text-amber-600"
+              sparklinePoints="0,25 15,10 30,20 45,5 60,15 80,10"
+              sparklineColor="#fbbf24"
+            />
+            <StatCard 
+              title="Avg Confidence"
+              value={loading ? '...' : `${avgConfPercent}%`}
+              trend="stable"
+              trendValue="Stable"
+              icon={CheckCircle2}
+              iconBg="bg-emerald-50"
+              iconColor="text-emerald-600"
+              sparklinePoints="0,15 20,15 40,10 60,10 80,5"
+              sparklineColor="#34d399"
+            />
+          </div>
+        </section>
 
         {/* Donut Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -375,8 +453,10 @@ export default function App() {
         >
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-10 gap-4">
             <div>
-              <h3 className="text-xl font-bold text-slate-800">Thống kê Phân loại Tin tức</h3>
-              <p className="text-sm text-slate-400 font-medium">Dữ liệu thật theo {timeRange.toLowerCase()}</p>
+              <h3 className="text-xl font-bold text-slate-800">Hoạt động phân loại theo thời gian</h3>
+              <p className="text-sm text-slate-400 font-medium">
+                Số lượng tin tức và spam theo {timeRange.toLowerCase()}
+              </p>
             </div>
             <div className="flex gap-2 bg-slate-100/50 p-1 rounded-full">
               {['Ngày', 'Tháng', 'Năm'].map((range) => (
@@ -396,10 +476,17 @@ export default function App() {
             </div>
           </div>
           
-          <div className="h-[300px] w-full mt-6">
+          <div className="h-[260px] w-full mt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={monthlyData.length ? monthlyData : [{ name: '-', value: 0 }]} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+              <BarChart
+                data={
+                  monthlyData.length
+                    ? monthlyData
+                    : [{ name: '-', total: 0, news: 0, spam: 0, active: false }]
+                }
+                margin={{ top: 0, right: 0, left: -20, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis 
                   dataKey="name" 
                   axisLine={false} 
@@ -417,18 +504,55 @@ export default function App() {
                     fontSize: '12px',
                     fontWeight: 'bold'
                   }}
+                  formatter={(value, name) => {
+                    if (name === 'total') return [value, 'Total Predictions'];
+                    if (name === 'spam') return [value, 'Spam Detected'];
+                    if (name === 'news') return [value, 'News Processed'];
+                    return [value, name];
+                  }}
+                  labelFormatter={(label) => `Thời gian: ${label}`}
                 />
-                <Bar dataKey="value" radius={[12, 12, 0, 0]}>
-                  {(monthlyData.length ? monthlyData : [{ name: '-', value: 0, active: false }]).map((entry, index) => (
-                    <Cell 
-                      key={`cell-${index}`} 
-                      fill={entry.active ? '#4f46e5' : '#e0e7ff'} 
-                      className="hover:fill-indigo-500 transition-colors duration-300"
-                    />
-                  ))}
-                </Bar>
+                <Bar dataKey="total" radius={[8, 8, 0, 0]} fill="#818cf8" />
+                <Bar dataKey="spam" radius={[8, 8, 0, 0]} fill="#fb7185" />
+                <Bar dataKey="news" radius={[8, 8, 0, 0]} fill="#fbbf24" />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm text-slate-600">
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+              <div>
+                <p className="font-semibold text-slate-500 uppercase text-[11px] tracking-wide">
+                  Tổng trong khoảng
+                </p>
+                <p className="text-base font-bold text-slate-900">
+                  {rangeTotal.toLocaleString('vi-VN')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+              <div>
+                <p className="font-semibold text-slate-500 uppercase text-[11px] tracking-wide">
+                  Tin tức
+                </p>
+                <p className="text-base font-bold text-slate-900">
+                  {rangeNewsTotal.toLocaleString('vi-VN')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+              <div>
+                <p className="font-semibold text-slate-500 uppercase text-[11px] tracking-wide">
+                  Spam
+                </p>
+                <p className="text-base font-bold text-slate-900">
+                  {rangeSpamTotal.toLocaleString('vi-VN')}
+                </p>
+              </div>
+            </div>
           </div>
         </motion.div>
 

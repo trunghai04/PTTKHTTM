@@ -28,13 +28,16 @@ class NewsClassifier:
         self.model = None
         self.vectorizer = None
         self._model_loaded = False
-        self.label_map = {
+        # Default label map for older models; newer models will
+        # provide their own dynamic label_map attached to the model.
+        self.default_label_map = {
             0: "Thể thao",
             1: "Chính trị",
             2: "Kinh tế",
             3: "Công nghệ",
             4: "Giải trí"
         }
+        self.label_map = self.default_label_map
         # Try to load model on init
         self._try_load_model()
     
@@ -78,6 +81,13 @@ class NewsClassifier:
                 self.model = pickle.load(f)
             with open(vectorizer_path, 'rb') as f:
                 self.vectorizer = pickle.load(f)
+            # Prefer dynamic label_map stored on the model (if present)
+            model_label_map = getattr(self.model, "label_map", None)
+            if isinstance(model_label_map, dict) and model_label_map:
+                # Ensure keys are integers (class indices)
+                self.label_map = {int(k): v for k, v in model_label_map.items()}
+            else:
+                self.label_map = self.default_label_map
             print(f"📦 Loaded news model from: {model_path}")
         else:
             raise FileNotFoundError(
@@ -129,9 +139,8 @@ class NewsClassifier:
         # This is the probability of the predicted class
         confidence = float(max(probability))
         
-        # Map prediction index to label name
-        # 0: Thể thao, 1: Chính trị, 2: Kinh tế, 3: Công nghệ, 4: Giải trí
-        label = self.label_map.get(prediction, "Unknown")
+        # Map prediction index to label name (dynamic label_map if available)
+        label = self.label_map.get(int(prediction), "Unknown")
         
         return {
             "label": label,

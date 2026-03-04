@@ -6,7 +6,8 @@ import {
   Zap,
   Cpu,
   CheckCircle2,
-  ChevronRight
+  ChevronRight,
+  Sparkles
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -49,7 +50,7 @@ const Hero = () => {
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </Link>
             <Link
-              to="/news"
+              to="/docs"
               className="px-8 py-4 rounded-2xl border border-slate-200 bg-white text-text-charcoal font-bold hover:bg-slate-50 transition-all shadow-sm"
             >
               Xem tài liệu

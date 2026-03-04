@@ -17,6 +17,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../api/client';
 import Navbar from '../components/Navbar';
+import { useNavigate } from 'react-router-dom';
 
 // --- Components ---
 
@@ -41,9 +42,10 @@ const Card = ({ children, className = "" }) => (
   </div>
 );
 
-const HistoryItem = ({ type, title, time, confidence }) => (
+const HistoryItem = ({ type, title, time, confidence, onClick }) => (
   <motion.div 
     whileHover={{ y: -4, x: 2 }}
+    onClick={onClick}
     className="group p-5 bg-slate-50/50 border border-slate-100 rounded-3xl cursor-pointer relative overflow-hidden transition-all hover:bg-white hover:border-indigo-200"
   >
     <div className="flex justify-between items-start mb-3">
@@ -74,12 +76,20 @@ export default function App() {
   const [historyItems, setHistoryItems] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [error, setError] = useState(null);
+  const navigate = useNavigate();
+
+  const isLoggedIn = !!localStorage.getItem('access_token');
 
   const characterCount = text.length;
   const estimatedRisk = text.length > 0 ? Math.min(Math.floor(text.length / 10), 98) : 0;
 
   const fetchHistory = async () => {
     try {
+      if (!isLoggedIn) {
+        // Khách: không gọi API, lịch sử chỉ là tạm thời trong state
+        setHistoryItems([]);
+        return;
+      }
       setIsLoadingHistory(true);
       const res = await api.get('/api/spam/history', { params: { limit: 50 } });
       const mapped = (res.data || []).map((item) => {
@@ -109,6 +119,7 @@ export default function App() {
     setIsAnalyzing(true);
     setError(null);
     try {
+      let predictionForHistory = null;
       if (isBulkScan) {
         const texts = text
           .split(/\r?\n/)
@@ -126,18 +137,38 @@ export default function App() {
             ? results.reduce((s, r) => s + (r.confidence || 0), 0) / total
             : 0;
 
-        setSpamResult({
+        const aggregate = {
           label: spamCount >= notSpamCount ? 'spam' : 'not spam',
           confidence: avgConfidence,
           spam_probability: total > 0 ? spamCount / total : 0,
           not_spam_probability: total > 0 ? notSpamCount / total : 0,
           warning: total > 0 ? `Bulk scan: ${total} mẫu (Spam ${spamCount}, Hợp lệ ${notSpamCount}).` : null,
-        });
+        };
+        setSpamResult(aggregate);
+        predictionForHistory = aggregate;
       } else {
         const res = await api.post('/api/spam/predict', { text });
         setSpamResult(res.data);
+        predictionForHistory = res.data;
       }
-      await fetchHistory();
+      if (isLoggedIn) {
+        // Người dùng đã login: đồng bộ lịch sử từ server
+        await fetchHistory();
+      } else if (predictionForHistory) {
+        // Khách: cập nhật lịch sử tạm thời trong phiên hiện tại
+        const nowIso = new Date().toISOString();
+        const label = String(predictionForHistory.label || '').toLowerCase();
+        const isSpam = label === 'spam';
+        const confidence = Math.round((predictionForHistory.confidence || 0) * 100);
+        const item = {
+          id: Date.now(),
+          text,
+          type: isSpam ? 'SPAM' : 'SAFE',
+          confidence,
+          created_at: nowIso,
+        };
+        setHistoryItems((prev) => [item, ...prev].slice(0, 50));
+      }
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.detail || 'Có lỗi khi gọi API kiểm tra spam');
@@ -154,8 +185,13 @@ export default function App() {
 
   const clearHistory = async () => {
     try {
-      await api.delete('/api/spam/history');
-      await fetchHistory();
+      if (isLoggedIn) {
+        await api.delete('/api/spam/history');
+        await fetchHistory();
+      } else {
+        // Khách: chỉ xóa lịch sử tạm thời trong state
+        setHistoryItems([]);
+      }
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.detail || 'Không thể xóa lịch sử');
@@ -197,10 +233,9 @@ export default function App() {
                 <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
                   <div>
                     <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">Phân tích email</h2>
-                    <p className="text-slate-500 font-medium text-sm mt-1">Kích hoạt bộ lọc thần kinh độ chính xác cao cho nội dung văn bản của bạn.</p>
+                    <p className="text-slate-500 font-medium text-sm mt-1">Kiểm tra chính xác cao cho nội dung văn bản của bạn.</p>
                   </div>
                   <div className="flex flex-row md:flex-col items-center md:items-end gap-2">
-                    <Badge variant="premium">AI cho doanh nghiệp</Badge>
                     <div className="flex items-center gap-2 px-3 py-1 bg-white/50 border border-slate-200 rounded-lg">
                       <span className="text-[10px] font-bold text-slate-600 uppercase">Quét hàng loạt</span>
                       <button
@@ -397,7 +432,17 @@ export default function App() {
                   <p className="text-xs text-slate-400">Đang tải lịch sử...</p>
                 )}
                 {!isLoadingHistory && historyItems.length === 0 && (
-                  <p className="text-xs text-slate-400">Chưa có bản ghi.</p>
+                  isLoggedIn ? (
+                    <p className="text-xs text-slate-400">Chưa có bản ghi.</p>
+                  ) : (
+                    <div className="space-y-1 text-xs text-slate-400">
+                      <p>Chưa có bản ghi.</p>
+                      <p className="text-[11px]">
+                        <span className="font-semibold text-slate-600">Chưa đăng nhập:</span>{' '}
+                        lịch sử chỉ lưu tạm thời. Đăng nhập để giữ lịch sử lâu dài.
+                      </p>
+                    </div>
+                  )
                 )}
                 {historyItems.map((item) => (
                   <HistoryItem
@@ -406,6 +451,11 @@ export default function App() {
                     title={item.text}
                     time={item.created_at ? new Date(item.created_at).toLocaleString('vi-VN') : ''}
                     confidence={`${item.confidence}%`}
+                    onClick={() =>
+                      navigate('/spam/detail', {
+                        state: { entry: item },
+                      })
+                    }
                   />
                 ))}
               </div>

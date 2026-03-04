@@ -21,6 +21,9 @@ Dataset Format:
 - Excel file with columns: "STT", "Nội Dung", "Nhãn/Label"
 - Spam labels: "Spam", "Not Spam"
 - News labels: "Thể thao", "Chính trị", "Kinh tế", "Công nghệ", "Giải trí"
+
+Pipeline: Train và inference (spam_service.predict / news_service.predict) đều dùng
+clean_text() → cùng phân phối, không bị mismatch.
 """
 import pickle
 import pandas as pd
@@ -28,17 +31,26 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, f1_score
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.metrics import accuracy_score, classification_report, f1_score, confusion_matrix
 from sklearn.utils import resample
 from pathlib import Path
 import os
 import warnings
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from app.utils.preprocess import clean_text
+
 warnings.filterwarnings('ignore')
 
 # Create models directory if it doesn't exist
 models_dir = Path(__file__).parent / "app" / "models"
 models_dir.mkdir(parents=True, exist_ok=True)
+
+# Create reports directory for evaluation plots
+reports_dir = Path(__file__).parent / "reports"
+reports_dir.mkdir(parents=True, exist_ok=True)
 
 # Configuration
 SPAM_MODEL_TYPE = 'naive_bayes'  # Options: 'naive_bayes' or 'logistic_regression'
@@ -46,8 +58,61 @@ DATASET_PATH = Path(__file__).parent / "dataset.xlsx"  # Path to Excel file
 USE_EXCEL = True  # Set to False to use sample data
 
 # Label definitions
+# For spam we keep fixed labels. For news we now
+# infer labels dynamically from the Excel file
+# (all labels that are not spam).
 SPAM_LABELS = ["Spam", "Not Spam"]
-NEWS_LABELS = ["Thể thao", "Chính trị", "Kinh tế", "Công nghệ", "Giải trí"]
+NEWS_LABELS = ["Thể thao", "Chính trị", "Kinh tế", "Công nghệ", "Giải trí"]  # kept for docs / sample data
+
+# Ngưỡng dataset nhỏ: dùng min_df=1, sublinear_tf=False để tránh mất từ vựng / overfit
+SMALL_DATASET_THRESHOLD = 200
+
+# Vietnamese stopwords (common words that add little meaning for classification)
+VIETNAMESE_STOPWORDS = {
+    "và", "là", "của", "có", "được", "cho", "với", "trong", "này", "đó",
+    "các", "một", "những", "đã", "sẽ", "khi", "như", "về", "từ", "đến",
+    "hay", "hoặc", "nếu", "thì", "mà", "để", "bởi", "theo", "qua", "sau",
+    "trước", "trên", "dưới", "ngoài", "trong", "giữa", "cùng", "vì", "do",
+    "rằng", "làm", "nên", "ra", "vào", "lên", "xuống", "qua", "lại",
+    "rất", "quá", "cũng", "đều", "chỉ", "mới", "đang", "vẫn", "còn",
+    "không", "chưa", "chẳng", "nào", "gì", "ai", "đâu", "sao", "thế",
+    "năm", "tháng", "ngày", "giờ", "phút", "giây", "hôm", "ngày",
+}
+
+
+def plot_confusion_matrix(cm, class_names, title, save_path):
+    """Plot and save confusion matrix heatmap."""
+    plt.figure(figsize=(5, 4))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names,
+    )
+    plt.title(title)
+    plt.xlabel("Predicted label")
+    plt.ylabel("True label")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"   💾 Saved confusion matrix to: {save_path}")
+
+
+def plot_accuracy_comparison(model_names, accuracies, title, save_path):
+    """Plot and save bar chart comparing model accuracies."""
+    plt.figure(figsize=(6, 4))
+    plt.bar(model_names, accuracies, color=["#4C72B0", "#55A868"])
+    plt.ylim(0, 1)
+    for i, acc in enumerate(accuracies):
+        plt.text(i, acc + 0.01, f"{acc:.3f}", ha="center")
+    plt.title(title)
+    plt.ylabel("Accuracy")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"   💾 Saved accuracy comparison chart to: {save_path}")
 
 def load_data_from_excel(file_path):
     """
@@ -78,7 +143,17 @@ def load_data_from_excel(file_path):
         # Clean data
         data = data.dropna(subset=["Nội Dung", "Nhãn/Label"])  # Remove rows with empty content or label
         data["Nội Dung"] = data["Nội Dung"].astype(str)
-        data["Nhãn/Label"] = data["Nhãn/Label"].str.strip()
+        data["Nhãn/Label"] = data["Nhãn/Label"].astype(str).str.strip()
+        
+        # Chuẩn hóa nhãn Spam/Not Spam (tránh "spam", "SPAM", " Not Spam " → NaN khi map)
+        def normalize_spam_label(s):
+            low = s.lower().strip()
+            if low in ("spam", "1", "yes", "true"):
+                return "Spam"
+            if low in ("not spam", "notspam", "not_spam", "0", "no", "false", "ham"):
+                return "Not Spam"
+            return s
+        data["Nhãn/Label"] = data["Nhãn/Label"].apply(normalize_spam_label)
         
         # Remove empty strings
         data = data[data["Nội Dung"].str.len() > 0]
@@ -251,47 +326,147 @@ def train_spam_model(data=None):
     label_map = {"Not Spam": 0, "Spam": 1}
     spam_data['label'] = spam_data['Nhãn/Label'].map(label_map)
     
-    X = spam_data['Nội Dung']
-    y = spam_data['label']
+    # Kiểm tra nhãn không đúng format → map ra NaN (dataset lỗi)
+    na_count = spam_data['label'].isna().sum()
+    if na_count > 0:
+        print(f"🔴 Lỗi nhãn: {na_count} dòng map ra NaN. Nhãn phải là 'Spam' hoặc 'Not Spam'. Các giá trị khác: {spam_data.loc[spam_data['label'].isna(), 'Nhãn/Label'].unique().tolist()}")
+        spam_data = spam_data.dropna(subset=['label'])
+        if len(spam_data) == 0:
+            raise ValueError("Không còn dòng nào sau khi bỏ nhãn lỗi. Sửa cột Nhãn/Label trong Excel.")
+    
+    # Apply same preprocessing as inference (phải giống spam_service.predict() → clean_text)
+    X = spam_data['Nội Dung'].apply(clean_text)
+    y = spam_data['label'].astype(int)
     
     print(f"\n📊 Final dataset:")
     print(f"   Total samples: {len(X)}")
     print(f"   Spam: {sum(y == 1)}")
     print(f"   Not Spam: {sum(y == 0)}")
+    print(f"   Label distribution:\n{pd.Series(y).value_counts()}")
     
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Vectorize using TF-IDF
-    vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+    # TF-IDF: min_df=1 để không mất từ vựng khi dataset nhỏ; sublinear_tf chỉ khi đủ dữ liệu
+    n_samples = len(X_train)
+    use_sublinear_tf = n_samples >= SMALL_DATASET_THRESHOLD
+    max_feat = min(5000, max(500, n_samples * 10))  # dataset nhỏ → ít feature, tránh overfit
+    vectorizer = TfidfVectorizer(
+        max_features=max_feat,
+        ngram_range=(1, 2),
+        sublinear_tf=use_sublinear_tf,
+        min_df=1,
+    )
     X_train_vec = vectorizer.fit_transform(X_train)
     X_test_vec = vectorizer.transform(X_test)
     
-    # Train model
-    if SPAM_MODEL_TYPE == 'naive_bayes':
-        model = MultinomialNB(alpha=1.0)
-        print("\n📐 Using Naive Bayes: y^ = argmax_c P(c) * ∏P(w_i|c)")
-    else:
-        model = LogisticRegression(max_iter=1000, random_state=42, solver='lbfgs')
-        print("\n📐 Using Logistic Regression: P(y=1|x) = 1 / (1 + e^(-z))")
+    # Debug pipeline (90% lỗi dự đoán sai do vocabulary quá nhỏ hoặc label lệch)
+    vocab_size = len(vectorizer.vocabulary_)
+    print(f"\n🔍 Pipeline debug:")
+    print(f"   Vocabulary size: {vocab_size}")
+    if vocab_size < 50:
+        print(f"   ⚠️  CẢNH BÁO: Vocabulary < 50 → model gần như không học được gì. Kiểm tra min_df hoặc thêm dữ liệu.")
+    print(f"   X_train shape: {X_train_vec.shape}")
+    print(f"   X_test shape: {X_test_vec.shape}")
+    print(f"   Label distribution (train):\n{pd.Series(y_train).value_counts()}")
     
-    model.fit(X_train_vec, y_train)
+    # Train và so sánh cả 2 model: Naive Bayes vs Logistic Regression
+    print("\n🤖 Training and comparing Spam models (Naive Bayes vs Logistic Regression)")
+    spam_models = {
+        "Naive Bayes": MultinomialNB(alpha=1.0),
+        "Logistic Regression": LogisticRegression(
+            max_iter=2000,
+            random_state=42,
+            solver='lbfgs',
+            class_weight='balanced',
+            C=2.0,
+        ),
+    }
+    results = []
     
-    # Evaluate
-    if X_test_vec is not None and len(y_test) > 0:
-        y_pred = model.predict(X_test_vec)
-        accuracy = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred)
+    for name, clf in spam_models.items():
+        print(f"\n--- {name} ---")
+        clf.fit(X_train_vec, y_train)
         
-        print(f"\n📈 Results:")
-        print(f"   Accuracy: {accuracy:.4f}")
-        print(f"   F1-Score: {f1:.4f}")
-        print("\n📋 Classification Report:")
-        print(classification_report(y_test, y_pred, target_names=['Not Spam', 'Spam']))
+        if X_test_vec is not None and len(y_test) > 0:
+            y_pred = clf.predict(X_test_vec)
+            accuracy = accuracy_score(y_test, y_pred)
+            f1 = f1_score(y_test, y_pred)
+            
+            print(f"Accuracy: {accuracy:.4f}")
+            print(f"F1-Score: {f1:.4f}")
+            
+            # Confusion matrix (text)
+            cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+            print("Confusion Matrix (rows=true, cols=pred):")
+            print(cm)
+            
+            # Confusion matrix heatmap
+            cm_path = reports_dir / f"spam_confusion_{name.lower().replace(' ', '_')}.png"
+            plot_confusion_matrix(
+                cm,
+                class_names=["Not Spam", "Spam"],
+                title=f"Spam - {name}",
+                save_path=cm_path,
+            )
+            
+            # Cross Validation (CV=5 nếu đủ dữ liệu)
+            cv_acc = None
+            if len(y_train) >= 5:
+                scores = cross_val_score(clf, X_train_vec, y_train, cv=5)
+                cv_acc = scores.mean()
+                print(f"CV Accuracy (5-fold): {cv_acc:.4f}")
+            else:
+                print("⚠️  Not enough samples for 5-fold cross validation.")
+            
+            results.append(
+                {
+                    "Model": name,
+                    "Accuracy": accuracy,
+                    "F1": f1,
+                    "CV_Accuracy": cv_acc,
+                }
+            )
+            
+            print("\n📋 Classification Report:")
+            print(classification_report(y_test, y_pred, target_names=['Not Spam', 'Spam']))
+        else:
+            print("⚠️  No test data available (dataset too small). Skipping evaluation and CV.")
+    
+    # Bảng so sánh tổng hợp
+    if results:
+        print("\n📊 Spam model comparison (hold-out + cross-validation):")
+        header = f"{'Model':<20}{'Accuracy':<12}{'F1':<12}{'CV Accuracy':<12}"
+        print(header)
+        print("-" * len(header))
+        model_names = []
+        accuracies = []
+        for r in results:
+            cv_str = f"{r['CV_Accuracy']:.4f}" if r["CV_Accuracy"] is not None else "-"
+            print(f"{r['Model']:<20}{r['Accuracy']:<12.4f}{r['F1']:<12.4f}{cv_str:<12}")
+            model_names.append(r["Model"])
+            accuracies.append(r["Accuracy"])
+        
+        # Biểu đồ so sánh Accuracy
+        acc_path = reports_dir / "spam_model_accuracy_comparison.png"
+        plot_accuracy_comparison(
+            model_names,
+            accuracies,
+            title="Spam Models Accuracy Comparison",
+            save_path=acc_path,
+        )
     else:
-        print("\n⚠️  No test data available (dataset too small). Model trained on all data.")
+        print("\n⚠️  No evaluation results to compare (dataset too small).")
+    
+    # Chọn model cuối cùng để deploy theo cấu hình SPAM_MODEL_TYPE
+    if SPAM_MODEL_TYPE == 'naive_bayes':
+        model = spam_models["Naive Bayes"]
+        print("\n📐 Using Naive Bayes as final deployed model.")
+    else:
+        model = spam_models["Logistic Regression"]
+        print("\n📐 Using Logistic Regression as final deployed model.")
     
     # Save model
     model_path = models_dir / "spam_model.pkl"
@@ -329,31 +504,47 @@ def train_news_model(data=None):
     
     # Load data
     if data is not None:
-        # Filter news data from Excel
-        news_data = data[data["Nhãn/Label"].isin(NEWS_LABELS)].copy()
+        # Treat all NON-spam labels as news categories.
+        news_data = data[~data["Nhãn/Label"].isin(SPAM_LABELS)].copy()
         
         if len(news_data) == 0:
-            print("⚠️  No news data found in Excel. Using sample data...")
+            print("⚠️  No news data found in Excel (only spam labels present). Using sample data...")
             news_data = pd.DataFrame(get_sample_news_data(), columns=['Nội Dung', 'Nhãn/Label'])
         else:
             print(f"✅ Found {len(news_data)} news samples in Excel")
+            detected_labels = sorted(news_data["Nhãn/Label"].unique())
+            print(f"   Detected news labels: {detected_labels}")
             # Balance data
             news_data = balance_data(news_data, "Nhãn/Label")
     else:
         print("📝 Using sample data...")
         news_data = pd.DataFrame(get_sample_news_data(), columns=['Nội Dung', 'Nhãn/Label'])
     
-    # Map labels to indices
-    label_map = {label: idx for idx, label in enumerate(NEWS_LABELS)}
+    # Map labels to indices dynamically based on labels present
+    unique_labels = sorted(news_data["Nhãn/Label"].unique())
+    label_map = {label: idx for idx, label in enumerate(unique_labels)}
     news_data['label'] = news_data['Nhãn/Label'].map(label_map)
     
-    X = news_data['Nội Dung']
-    y = news_data['label']
+    # Kiểm tra nhãn lỗi (typo / giá trị lạ → NaN)
+    na_count = news_data['label'].isna().sum()
+    if na_count > 0:
+        print(f"🔴 Lỗi nhãn News: {na_count} dòng map ra NaN. Giá trị lạ: {news_data.loc[news_data['label'].isna(), 'Nhãn/Label'].unique().tolist()}")
+        news_data = news_data.dropna(subset=['label'])
+        if len(news_data) == 0:
+            raise ValueError("Không còn dòng nào sau khi bỏ nhãn lỗi.")
+        unique_labels = sorted(news_data["Nhãn/Label"].unique())
+        label_map = {label: idx for idx, label in enumerate(unique_labels)}
+        news_data['label'] = news_data['Nhãn/Label'].map(label_map)
+    
+    # Apply same preprocessing as inference (giống news_service.predict() → clean_text)
+    X = news_data['Nội Dung'].apply(clean_text)
+    y = news_data['label'].astype(int)
     
     print(f"\n📊 Final dataset:")
     print(f"   Total samples: {len(X)}")
     for label, idx in label_map.items():
         print(f"   {label}: {sum(y == idx)}")
+    print(f"   Label distribution:\n{pd.Series(y).value_counts()}")
     
     # Split data
     # Adjust test_size if data is too small
@@ -371,52 +562,160 @@ def train_news_model(data=None):
             X, y, test_size=0.2, random_state=42, stratify=y
         )
     
-    # Vectorize using TF-IDF
-    vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+    # TF-IDF: min_df=1 tránh mất từ vựng; dataset nhỏ → ít feature, sublinear_tf=False
+    n_samples = len(X_train)
+    use_sublinear_tf = n_samples >= SMALL_DATASET_THRESHOLD
+    max_feat = min(12000, max(1000, n_samples * 15))
+    vectorizer = TfidfVectorizer(
+        max_features=max_feat,
+        ngram_range=(1, 3),
+        stop_words=list(VIETNAMESE_STOPWORDS),
+        sublinear_tf=use_sublinear_tf,
+        min_df=1,
+    )
     X_train_vec = vectorizer.fit_transform(X_train)
     if len(X_test) > 0:
         X_test_vec = vectorizer.transform(X_test)
     else:
         X_test_vec = None
     
-    # Train model with Softmax
-    # For multi-class, LogisticRegression automatically uses softmax
-    # Note: In newer sklearn versions, multi_class parameter may not be needed
+    # Debug pipeline
+    vocab_size = len(vectorizer.vocabulary_)
+    print(f"\n🔍 Pipeline debug (News):")
+    print(f"   Vocabulary size: {vocab_size}")
+    if vocab_size < 50:
+        print(f"   ⚠️  CẢNH BÁO: Vocabulary < 50 → model học rất yếu. Thêm dữ liệu hoặc kiểm tra min_df.")
+    print(f"   X_train shape: {X_train_vec.shape}")
+    print(f"   X_test shape: {X_test_vec.shape if X_test_vec is not None else 'N/A'}")
+    print(f"   Label distribution (train):\n{pd.Series(y_train).value_counts()}")
+    
+    # Train và so sánh cả 2 model cho news: MultinomialNB vs Logistic Regression (Softmax)
+    print("\n🤖 Training and comparing News models (MultinomialNB vs Logistic Regression)")
+    news_models = {}
+    
+    # Naive Bayes (Multinomial) cho multi-class
+    news_models["Naive Bayes"] = MultinomialNB(alpha=1.0)
+    
+    # Logistic Regression (Softmax)
     try:
-        model = LogisticRegression(
+        log_reg = LogisticRegression(
             max_iter=1000,
             random_state=42,
             solver='lbfgs',
-            multi_class='multinomial'
+            multi_class='multinomial',
+            class_weight='balanced',
+            C=2.0,
         )
     except TypeError:
         # For newer sklearn versions without multi_class parameter
-        model = LogisticRegression(
+        log_reg = LogisticRegression(
             max_iter=1000,
             random_state=42,
-            solver='lbfgs'
+            solver='lbfgs',
+            class_weight='balanced',
+            C=2.0,
         )
+    
+    news_models["Logistic Regression"] = log_reg
+    
+    results = []
     print("\n📐 Softmax: P(y=j|x) = e^(z_j) / Σ(k=1 to 5) e^(z_k)")
-    model.fit(X_train_vec, y_train)
     
-    # Evaluate
-    if X_test_vec is not None and len(y_test) > 0:
-        y_pred = model.predict(X_test_vec)
-        accuracy = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred, average='weighted')
+    for name, clf in news_models.items():
+        print(f"\n--- {name} ---")
+        clf.fit(X_train_vec, y_train)
         
-        print(f"\n📈 Results:")
-        print(f"   Accuracy: {accuracy:.4f}")
-        print(f"   F1-Score (weighted): {f1:.4f}")
-        print("\n📋 Classification Report:")
-        print(classification_report(y_test, y_pred, target_names=NEWS_LABELS))
-    else:
-        print("\n⚠️  No test data available (dataset too small). Model trained on all data.")
+        if X_test_vec is not None and len(y_test) > 0:
+            y_pred = clf.predict(X_test_vec)
+            accuracy = accuracy_score(y_test, y_pred)
+            f1 = f1_score(y_test, y_pred, average='weighted')
+            
+            print(f"Accuracy: {accuracy:.4f}")
+            print(f"F1-Score (weighted): {f1:.4f}")
+            
+            # Confusion matrix
+            cm = confusion_matrix(y_test, y_pred)
+            print("Confusion Matrix (rows=true, cols=pred):")
+            print(cm)
+            
+            # Nhãn theo đúng index trong label_map
+            unique_indices = sorted(pd.unique(y))
+            idx_to_label = {idx: label for label, idx in label_map.items()}
+            target_names = [idx_to_label[idx] for idx in unique_indices]
+            
+            # Confusion matrix heatmap
+            cm_path = reports_dir / f"news_confusion_{name.lower().replace(' ', '_')}.png"
+            plot_confusion_matrix(
+                cm,
+                class_names=target_names,
+                title=f"News - {name}",
+                save_path=cm_path,
+            )
+            
+            # Cross Validation (5-fold nếu đủ dữ liệu)
+            cv_acc = None
+            if len(y_train) >= 5:
+                scores = cross_val_score(clf, X_train_vec, y_train, cv=5)
+                cv_acc = scores.mean()
+                print(f"CV Accuracy (5-fold): {cv_acc:.4f}")
+            else:
+                print("⚠️  Not enough samples for 5-fold cross validation.")
+            
+            results.append(
+                {
+                    "Model": name,
+                    "Accuracy": accuracy,
+                    "F1": f1,
+                    "CV_Accuracy": cv_acc,
+                }
+            )
+            
+            print("\n📋 Classification Report:")
+            print(
+                classification_report(
+                    y_test,
+                    y_pred,
+                    labels=unique_indices,
+                    target_names=target_names,
+                )
+            )
+        else:
+            print("⚠️  No test data available (dataset too small). Skipping evaluation and CV.")
     
-    # Save model
+    # Bảng so sánh tổng hợp
+    if results:
+        print("\n📊 News model comparison (hold-out + cross-validation):")
+        header = f"{'Model':<20}{'Accuracy':<12}{'F1':<12}{'CV Accuracy':<12}"
+        print(header)
+        print("-" * len(header))
+        model_names = []
+        accuracies = []
+        for r in results:
+            cv_str = f"{r['CV_Accuracy']:.4f}" if r["CV_Accuracy"] is not None else "-"
+            print(f"{r['Model']:<20}{r['Accuracy']:<12.4f}{r['F1']:<12.4f}{cv_str:<12}")
+            model_names.append(r["Model"])
+            accuracies.append(r["Accuracy"])
+        
+        # Biểu đồ so sánh Accuracy
+        acc_path = reports_dir / "news_model_accuracy_comparison.png"
+        plot_accuracy_comparison(
+            model_names,
+            accuracies,
+            title="News Models Accuracy Comparison",
+            save_path=acc_path,
+        )
+    else:
+        print("\n⚠️  No evaluation results to compare (dataset too small).")
+    # Chọn Logistic Regression (Softmax) làm model deploy cuối cùng
+    model = news_models["Logistic Regression"]
+    
+    # Save model (attach label_map so inference knows dynamic labels)
     model_path = models_dir / "news_model.pkl"
     vectorizer_path = models_dir / "news_vectorizer.pkl"
     
+    # Attach idx->label map for inference (API maps prediction index to label name)
+    model.label_map = {idx: label for label, idx in label_map.items()}
+
     with open(model_path, 'wb') as f:
         pickle.dump(model, f)
     
