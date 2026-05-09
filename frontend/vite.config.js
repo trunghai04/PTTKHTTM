@@ -20,5 +20,6 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    allowedHosts: ['bloopai.bloop.io.vn'],
   },
 })

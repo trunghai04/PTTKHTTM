@@ -14,7 +14,7 @@ export default function Docs() {
             <span>Tài liệu hệ thống</span>
           </div>
           <h1 className="mt-4 text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight">
-            Tài liệu Lexica AI – Spam &amp; News
+            Tài liệu BloopAI – Spam &amp; News
           </h1>
           <p className="mt-3 text-slate-600 text-sm md:text-base max-w-2xl">
             Tóm tắt cách hệ thống hoạt động, kiến trúc mô hình, và hướng dẫn sử dụng các trang
@@ -166,7 +166,7 @@ Response:
         </section>
 
         <footer className="pt-6 border-t border-slate-200 text-xs text-slate-500">
-          Tài liệu này mô tả phiên bản demo của hệ thống Lexica AI – phù hợp cho mục đích học tập và
+          Tài liệu này mô tả phiên bản demo của hệ thống BloopAI – phù hợp cho mục đích học tập và
           trình bày đồ án.
         </footer>
       </main>

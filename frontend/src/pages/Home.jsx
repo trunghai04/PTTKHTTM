@@ -7,7 +7,6 @@ import {
   Cpu,
   CheckCircle2,
   ChevronRight,
-  Sparkles
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -255,7 +254,7 @@ const CTA = () => {
         <div className="relative z-10">
           <h2 className="text-5xl md:text-6xl font-extrabold mb-8 text-text-charcoal tracking-tight">Sẵn sàng mở rộng năng lực AI của bạn?</h2>
           <p className="text-xl text-slate-500 mb-12 max-w-2xl mx-auto leading-relaxed">
-            Gia nhập hơn 500+ doanh nghiệp đang dùng Lexica AI để tự động hóa quy trình phân loại văn bản với độ chính xác cao.
+            Gia nhập hơn 500+ doanh nghiệp đang dùng BloopAI để tự động hóa quy trình phân loại văn bản với độ chính xác cao.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button className="px-10 py-5 rounded-2xl bg-text-charcoal text-white font-bold hover:bg-accent-blue transition-all shadow-xl shadow-slate-200">
@@ -276,8 +275,12 @@ const Footer = () => {
     <footer className="py-16 px-6 border-t border-slate-200 bg-white">
       <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row justify-between items-center gap-12">
         <div className="flex items-center gap-2">
-          <Sparkles className="text-accent-blue w-6 h-6" />
-          <span className="font-bold text-text-charcoal text-lg">LEXICA AI</span>
+          <img
+            src="/logo_rounded.png"
+            alt="BloopAI logo"
+            className="w-6 h-6 rounded-full object-cover"
+          />
+          <span className="font-bold text-text-charcoal text-lg">BloopAI</span>
         </div>
         
         <div className="flex flex-wrap justify-center gap-8 font-semibold text-sm text-slate-500">
@@ -287,7 +290,7 @@ const Footer = () => {
           <a href="#" className="hover:text-accent-blue transition-colors">Liên hệ</a>
         </div>
         
-        <p className="text-slate-400 text-sm">© 2024 Lexica Artificial Intelligence. Đã đăng ký bản quyền.</p>
+        <p className="text-slate-400 text-sm">© 2026 BloopAI. Đã đăng ký bản quyền.</p>
       </div>
     </footer>
   );

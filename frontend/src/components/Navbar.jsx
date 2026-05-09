@@ -1,4 +1,4 @@
-import { Sparkles, Menu, X } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -38,9 +38,13 @@ const Navbar = () => {
     <nav className="sticky top-0 z-50 px-6 py-4 bg-white/80 backdrop-blur-xl border-b border-slate-200">
       <div className="max-w-[1440px] mx-auto flex justify-between items-center">
         <Link to="/" className="flex items-center gap-2">
-          <Sparkles className="text-accent-blue w-8 h-8" />
+          <img
+            src="/logo_rounded.png"
+            alt="BloopAI logo"
+            className="w-8 h-8 rounded-full object-cover"
+          />
           <span className="text-xl font-bold tracking-tight text-text-charcoal">
-            LEXICA <span className="text-accent-purple">AI</span>
+            Bloop<span className="text-accent-purple">AI</span>
           </span>
         </Link>
 

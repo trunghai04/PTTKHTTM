@@ -6,6 +6,12 @@ export default function SpamDetail() {
   const location = useLocation();
   const navigate = useNavigate();
   const entry = location.state?.entry;
+  const sourceText =
+    entry?.source === 'gmail'
+      ? 'Gmail'
+      : entry?.source === 'manual'
+      ? 'Email thủ công'
+      : 'Không xác định';
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800">
@@ -89,7 +95,7 @@ export default function SpamDetail() {
                     Nguồn dữ liệu
                   </p>
                   <p className="text-sm font-semibold text-slate-800">
-                    Email thủ công / Gmail (tùy theo nơi gửi)
+                    {sourceText}
                   </p>
                 </div>
               </div>

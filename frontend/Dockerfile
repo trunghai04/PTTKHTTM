@@ -14,5 +14,5 @@ COPY . .
 # Expose port
 EXPOSE 3000
 
-# Start development server (ensure deps are installed with latest package.json)
-CMD ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+# Start development server
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

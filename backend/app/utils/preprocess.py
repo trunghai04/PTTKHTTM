@@ -1,11 +1,19 @@
 import re
 import string
+import html
 from typing import List
 
 def clean_text(text: str) -> str:
     """
     Clean and preprocess text for classification
     """
+    if not isinstance(text, str):
+        text = str(text or "")
+
+    # Decode HTML entities and remove HTML tags (bill / email HTML body)
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+
     # Convert to lowercase
     text = text.lower()
     

@@ -1,0 +1,12 @@
+tunnel: 38287ebd-d31a-40b2-946e-24d96bf3cccd
+credentials-file: C:\Users\ADMIN\.cloudflared\38287ebd-d31a-40b2-946e-24d96bf3cccd.json
+
+ingress:
+  - hostname: bloopai.bloop.io.vn
+    path: ^/(api|docs|openapi\.json|health).*
+    service: http://localhost:8000
+  - hostname: bloopai.bloop.io.vn
+    service: http://localhost:3000
+  - hostname: api.bloopai.bloop.io.vn
+    service: http://localhost:8000
+  - service: http_status:404

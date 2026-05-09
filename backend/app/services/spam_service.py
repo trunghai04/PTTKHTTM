@@ -20,6 +20,10 @@ If using Logistic Regression:
 import pickle
 import os
 from pathlib import Path
+from typing import List, Tuple
+
+import math
+
 from app.utils.preprocess import clean_text
 
 class SpamClassifier:
@@ -153,8 +157,75 @@ class SpamClassifier:
             "not_spam_probability": round(float(not_spam_prob), 4)
         }
 
+    def predict_long(
+        self,
+        text: str,
+        *,
+        chunk_max_chars: int = 500,
+        chunk_min_chars: int = 80,
+    ) -> dict:
+        """
+        Predict for long texts by chunking then aggregating probabilities.
+
+        Strategy:
+        - Clean text once
+        - Split into chunks (roughly) by max chars
+        - Predict each chunk
+        - Aggregate spam/not-spam probabilities weighted by chunk length
+        """
+        cleaned = clean_text(text)
+        if len(cleaned) <= chunk_max_chars:
+            return self.predict(text)
+
+        chunks: List[str] = []
+        buf: List[str] = []
+        buf_len = 0
+        for token in cleaned.split():
+            if buf_len + len(token) + 1 > chunk_max_chars and buf_len >= chunk_min_chars:
+                chunks.append(" ".join(buf))
+                buf = [token]
+                buf_len = len(token)
+            else:
+                buf.append(token)
+                buf_len += len(token) + 1
+        if buf:
+            chunks.append(" ".join(buf))
+
+        # Predict each chunk
+        weighted_spam = 0.0
+        weighted_not = 0.0
+        total_w = 0.0
+
+        for ch in chunks:
+            out = self.predict(ch)
+            w = max(1.0, float(len(ch)))
+            total_w += w
+            weighted_spam += w * float(out.get("spam_probability", 0.0))
+            weighted_not += w * float(out.get("not_spam_probability", 0.0))
+
+        if total_w <= 0:
+            return self.predict(text)
+
+        spam_prob = weighted_spam / total_w
+        not_prob = weighted_not / total_w
+
+        if spam_prob >= self.spam_threshold and spam_prob > not_prob:
+            label = "Spam"
+            confidence = spam_prob
+        else:
+            label = "Not Spam"
+            confidence = not_prob
+
+        return {
+            "label": label,
+            "confidence": round(float(confidence), 4),
+            "spam_probability": round(float(spam_prob), 4),
+            "not_spam_probability": round(float(not_prob), 4),
+            "warning": "Long text: predicted via chunking + weighted aggregation.",
+        }
+
 # Global instance with threshold
-# Higher threshold (0.6-0.7) reduces false positives
-# Lower threshold (0.5) is more sensitive but has more false positives
-SPAM_THRESHOLD = 0.65  # Can be adjusted: 0.5 (sensitive) to 0.8 (strict)
+# Higher threshold (0.8-0.9) strongly reduces false positives
+# Lower threshold (0.5-0.6) is more sensitive but has more false positives
+SPAM_THRESHOLD = 0.85  # stricter: only very confident spam is marked Spam
 spam_classifier = SpamClassifier(spam_threshold=SPAM_THRESHOLD)

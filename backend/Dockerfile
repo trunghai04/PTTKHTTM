@@ -1,18 +1,20 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+# Make pip installs more resilient on slow/unstable networks.
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=12
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
-# Copy requirements
-COPY requirements.txt .
+# Copy runtime requirements first for better Docker layer caching
+COPY requirements.runtime.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefer-binary -r requirements.runtime.txt -i ${PIP_INDEX_URL}
 
 # Copy application code
 COPY . .

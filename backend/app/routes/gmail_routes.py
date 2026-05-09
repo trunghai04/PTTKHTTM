@@ -35,19 +35,33 @@ def _get_message_body(payload: dict) -> str:
     """Extract body text from Gmail message payload."""
     if not payload:
         return ""
+    # Prefer text/plain, but fall back to text/html if needed (bank receipts are often HTML only)
     if payload.get("body", {}).get("data"):
         try:
             data = payload["body"]["data"]
             return base64.urlsafe_b64decode(data.encode("ASCII")).decode("utf-8", errors="replace")
         except Exception:
             pass
+
+    # Try parts
+    preferred_part = None
+    html_part = None
     for part in payload.get("parts", []):
-        if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-            try:
-                data = part["body"]["data"]
-                return base64.urlsafe_b64decode(data.encode("ASCII")).decode("utf-8", errors="replace")
-            except Exception:
-                pass
+        mime = part.get("mimeType", "")
+        if mime == "text/plain" and part.get("body", {}).get("data"):
+            preferred_part = part
+            break
+        if mime == "text/html" and part.get("body", {}).get("data") and html_part is None:
+            html_part = part
+
+    target_part = preferred_part or html_part
+    if target_part is not None:
+        try:
+            data = target_part["body"]["data"]
+            return base64.urlsafe_b64decode(data.encode("ASCII")).decode("utf-8", errors="replace")
+        except Exception:
+            pass
+
     return ""
 
 

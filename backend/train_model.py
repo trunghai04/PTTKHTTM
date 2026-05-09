@@ -39,8 +39,11 @@ import os
 import warnings
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.calibration import CalibratedClassifierCV
 
 from app.utils.preprocess import clean_text
+from app.database.db import SessionLocal
+from app.database.models import Prediction, PredictionType
 
 warnings.filterwarnings('ignore')
 
@@ -53,9 +56,17 @@ reports_dir = Path(__file__).parent / "reports"
 reports_dir.mkdir(parents=True, exist_ok=True)
 
 # Configuration
-SPAM_MODEL_TYPE = 'naive_bayes'  # Options: 'naive_bayes' or 'logistic_regression'
-DATASET_PATH = Path(__file__).parent / "dataset.xlsx"  # Path to Excel file
-USE_EXCEL = True  # Set to False to use sample data
+# Auto-select best spam model by validation F1 for better robustness across datasets.
+SPAM_MODEL_TYPE = 'auto'  # Options: 'auto', 'naive_bayes', 'logistic_regression'
+
+# Main Excel dataset (có thể có cột STT hoặc không, đều OK)
+DATASET_PATH = Path(__file__).parent / "dataset.xlsx"
+USE_EXCEL = True  # Set to False to ignore Excel
+
+# Optional CSV dataset (không cần cột STT).
+# Yêu cầu ONLY 2 cột chính: "Nội Dung", "Nhãn/Label".
+CSV_DATASET_PATH = Path(__file__).parent / "dataset.csv"
+USE_CSV = True  # Set to False to ignore CSV
 
 # Label definitions
 # For spam we keep fixed labels. For news we now
@@ -66,6 +77,7 @@ NEWS_LABELS = ["Thể thao", "Chính trị", "Kinh tế", "Công nghệ", "Giả
 
 # Ngưỡng dataset nhỏ: dùng min_df=1, sublinear_tf=False để tránh mất từ vựng / overfit
 SMALL_DATASET_THRESHOLD = 200
+MIN_NEWS_CLASS_SAMPLES = 20
 
 # Vietnamese stopwords (common words that add little meaning for classification)
 VIETNAMESE_STOPWORDS = {
@@ -78,6 +90,30 @@ VIETNAMESE_STOPWORDS = {
     "không", "chưa", "chẳng", "nào", "gì", "ai", "đâu", "sao", "thế",
     "năm", "tháng", "ngày", "giờ", "phút", "giây", "hôm", "ngày",
 }
+
+def normalize_spam_label(s: str) -> str:
+    """Normalize spam/not-spam aliases into canonical labels."""
+    low = str(s).lower().strip()
+    if low in ("spam", "1", "yes", "true"):
+        return "Spam"
+    if low in ("not spam", "notspam", "not_spam", "0", "no", "false", "ham"):
+        return "Not Spam"
+    return str(s).strip()
+
+
+def deduplicate_by_text(df: pd.DataFrame, text_col: str = "Nội Dung") -> pd.DataFrame:
+    """
+    Deduplicate dataset by text content to reduce train/test leakage.
+    Keep first occurrence to preserve deterministic behavior.
+    """
+    before = len(df)
+    deduped = df.drop_duplicates(subset=[text_col]).reset_index(drop=True)
+    removed = before - len(deduped)
+    ratio = (removed / before) if before else 0.0
+    print(
+        f"🧹 Dedup by text: removed {removed}/{before} rows ({ratio:.2%}), remaining {len(deduped)} rows."
+    )
+    return deduped
 
 
 def plot_confusion_matrix(cm, class_names, title, save_path):
@@ -146,13 +182,6 @@ def load_data_from_excel(file_path):
         data["Nhãn/Label"] = data["Nhãn/Label"].astype(str).str.strip()
         
         # Chuẩn hóa nhãn Spam/Not Spam (tránh "spam", "SPAM", " Not Spam " → NaN khi map)
-        def normalize_spam_label(s):
-            low = s.lower().strip()
-            if low in ("spam", "1", "yes", "true"):
-                return "Spam"
-            if low in ("not spam", "notspam", "not_spam", "0", "no", "false", "ham"):
-                return "Not Spam"
-            return s
         data["Nhãn/Label"] = data["Nhãn/Label"].apply(normalize_spam_label)
         
         # Remove empty strings
@@ -169,9 +198,103 @@ def load_data_from_excel(file_path):
         print(f"⚠️  File not found: {file_path}")
         print("   Using sample data instead...")
         return None
+
+
+def load_data_from_csv(file_path):
+    """
+    Load and clean data from CSV file.
+
+    Không bắt buộc có cột STT.
+    Yêu cầu các cột nội dung / nhãn giống Excel:
+    - Nội Dung
+    - Nhãn/Label
+    """
+    try:
+        # Tolerant parsing for noisy CSV (bad quoting/comma in content).
+        # Keep training robust by skipping malformed lines.
+        try:
+            data = pd.read_csv(file_path, engine="python", on_bad_lines="skip")
+        except TypeError:
+            # pandas < 2.0 fallback
+            data = pd.read_csv(file_path, engine="python", error_bad_lines=False)
+        print(f"✅ Loaded CSV data from {file_path}")
+        print(f"   Total rows: {len(data)}")
+
+        # Chuẩn hóa tên cột (hỗ trợ cả header không dấu: NoiDung, Label)
+        def _norm_col_key(s: str) -> str:
+            return (
+                str(s)
+                .replace("\ufeff", "")
+                .strip()
+                .lower()
+                .replace(" ", "")
+                .replace("_", "")
+                .replace("-", "")
+            )
+
+        col_aliases = {
+            "Nội Dung": [
+                "Nội Dung",
+                "Nội dung",
+                "NoiDung",
+                "Noi Dung",
+                "noi_dung",
+                "content",
+                "text",
+            ],
+            "Nhãn/Label": [
+                "Nhãn/Label",
+                "Nhan/Label",
+                "Nhãn",
+                "Nhan",
+                "Label",
+                "label",
+                "category",
+            ],
+        }
+        alias_key_map = {
+            _norm_col_key(alias): canonical
+            for canonical, aliases in col_aliases.items()
+            for alias in aliases
+        }
+
+        rename_map = {}
+        for col in list(data.columns):
+            canonical = alias_key_map.get(_norm_col_key(col))
+            if canonical and col != canonical:
+                rename_map[col] = canonical
+        if rename_map:
+            data = data.rename(columns=rename_map)
+
+        required_cols = ["Nội Dung", "Nhãn/Label"]
+        if not all(col in data.columns for col in required_cols):
+            print(
+                f"⚠️  CSV thiếu cột bắt buộc. Cần {required_cols}, hiện có: {list(data.columns)}"
+            )
+            return None
+
+        # Drop các dòng thiếu nội dung / nhãn
+        data = data.dropna(subset=["Nội Dung", "Nhãn/Label"])
+        data["Nội Dung"] = data["Nội Dung"].astype(str)
+        data["Nhãn/Label"] = data["Nhãn/Label"].astype(str).str.strip()
+
+        # Chuẩn hóa nhãn Spam/Not Spam giống Excel
+        data["Nhãn/Label"] = data["Nhãn/Label"].apply(normalize_spam_label)
+
+        # Bỏ dòng rỗng
+        data = data[data["Nội Dung"].str.len() > 0]
+        data = data[data["Nhãn/Label"].str.len() > 0]
+
+        print(f"   After CSV cleaning: {len(data)} rows")
+        print(f"\n📊 CSV Label distribution:")
+        print(data["Nhãn/Label"].value_counts())
+
+        return data
+    except FileNotFoundError:
+        print(f"ℹ️  CSV file not found: {file_path}")
+        return None
     except Exception as e:
-        print(f"⚠️  Error reading Excel file: {e}")
-        print("   Using sample data instead...")
+        print(f"⚠️  Error reading CSV file: {e}")
         return None
 
 def balance_data(df, label_column, min_samples_per_class=None):
@@ -225,6 +348,54 @@ def balance_data(df, label_column, min_samples_per_class=None):
     balanced_df = balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)  # Shuffle
     
     return balanced_df
+
+
+def load_user_feedback_data(
+    prediction_type: PredictionType, min_confidence: float = 0.9
+):
+    """
+    Load high-confidence user predictions from the database to use as extra training data.
+
+    - prediction_type: PredictionType.SPAM or PredictionType.NEWS
+    - min_confidence: only use rows with confidence >= threshold
+
+    Returns:
+        DataFrame with columns ["Nội Dung", "Nhãn/Label"] or None if no data.
+    """
+    try:
+        db = SessionLocal()
+        query = (
+            db.query(Prediction)
+            .filter(
+                Prediction.type == prediction_type,
+                Prediction.confidence >= float(min_confidence),
+            )
+            .order_by(Prediction.created_at.desc())
+        )
+
+        rows = query.all()
+        if not rows:
+            print(
+                f"ℹ️  No high-confidence {prediction_type.value} user feedback found (min_confidence={min_confidence})."
+            )
+            return None
+
+        print(
+            f"✅ Loaded {len(rows)} high-confidence {prediction_type.value} samples from user feedback (confidence >= {min_confidence})."
+        )
+
+        texts = [r.text for r in rows]
+        labels = [r.predicted_label for r in rows]
+        df = pd.DataFrame({"Nội Dung": texts, "Nhãn/Label": labels})
+        return df
+    except Exception as e:
+        print(f"⚠️  Could not load user feedback data from database: {e}")
+        return None
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 def get_sample_spam_data():
     """Fallback sample data for Spam classification"""
@@ -316,11 +487,26 @@ def train_spam_model(data=None):
             spam_data = pd.DataFrame(get_sample_spam_data(), columns=['Nội Dung', 'Nhãn/Label'])
         else:
             print(f"✅ Found {len(spam_data)} spam samples in Excel")
+            # Remove duplicate texts first to avoid leakage, then balance classes.
+            spam_data = deduplicate_by_text(spam_data, "Nội Dung")
             # Balance data
             spam_data = balance_data(spam_data, "Nhãn/Label")
     else:
         print("📝 Using sample data...")
         spam_data = pd.DataFrame(get_sample_spam_data(), columns=['Nội Dung', 'Nhãn/Label'])
+
+    # KHÔNG còn tự học từ DB cho Spam nữa.
+    # Lý do: dữ liệu trong bảng predictions có thể chứa nhiều mẫu bị gắn nhãn sai
+    # (ví dụ biên lai ngân hàng bị model cũ đánh nhầm là Spam). Đưa các mẫu này
+    # vào lại tập train sẽ làm mô hình củng cố sai lệch.
+    #
+    # Nếu sau này bạn có cơ chế review / gán nhãn lại dữ liệu trong DB, ta có thể
+    # bật lại việc dùng load_user_feedback_data với tập đã được làm sạch.
+    #
+    # user_spam_df = load_user_feedback_data(PredictionType.SPAM, min_confidence=0.98)
+    # if user_spam_df is not None and not user_spam_df.empty:
+    #     print(f"🔁 Augmenting spam dataset with {len(user_spam_df)} user-labelled samples.")
+    #     spam_data = pd.concat([spam_data, user_spam_df], ignore_index=True)
     
     # Map labels to binary (0: Not Spam, 1: Spam)
     label_map = {"Not Spam": 0, "Spam": 1}
@@ -460,13 +646,33 @@ def train_spam_model(data=None):
     else:
         print("\n⚠️  No evaluation results to compare (dataset too small).")
     
-    # Chọn model cuối cùng để deploy theo cấu hình SPAM_MODEL_TYPE
-    if SPAM_MODEL_TYPE == 'naive_bayes':
-        model = spam_models["Naive Bayes"]
+    # Chọn model deploy cuối cùng
+    selected_model_name = "Logistic Regression"
+    if results and SPAM_MODEL_TYPE == "auto":
+        selected_model_name = max(results, key=lambda r: r["F1"])["Model"]
+        print(f"\n📐 Auto-selected best spam model by F1: {selected_model_name}.")
+    elif SPAM_MODEL_TYPE == "naive_bayes":
+        selected_model_name = "Naive Bayes"
         print("\n📐 Using Naive Bayes as final deployed model.")
     else:
-        model = spam_models["Logistic Regression"]
+        selected_model_name = "Logistic Regression"
         print("\n📐 Using Logistic Regression as final deployed model.")
+    model = spam_models[selected_model_name]
+
+    # Calibrate probabilities so "confidence" is less overconfident.
+    # This helps confidence behave better on out-of-domain / long-form inputs.
+    try:
+        min_class = int(pd.Series(y_train).value_counts().min())
+        if len(y_train) >= 300 and min_class >= 50:
+            print("\n🧪 Calibrating spam model probabilities (sigmoid)...")
+            calibrated = CalibratedClassifierCV(model, method="sigmoid", cv=3)
+            calibrated.fit(X_train_vec, y_train)
+            model = calibrated
+            print("   ✅ Calibration applied.")
+        else:
+            print("\nℹ️  Skipping calibration (dataset too small / imbalanced for stable calibration).")
+    except Exception as e:
+        print(f"\n⚠️  Calibration skipped due to error: {e}")
     
     # Save model
     model_path = models_dir / "spam_model.pkl"
@@ -514,11 +720,32 @@ def train_news_model(data=None):
             print(f"✅ Found {len(news_data)} news samples in Excel")
             detected_labels = sorted(news_data["Nhãn/Label"].unique())
             print(f"   Detected news labels: {detected_labels}")
+            # Remove duplicate texts first to avoid leakage, then balance classes.
+            news_data = deduplicate_by_text(news_data, "Nội Dung")
+            # Drop tiny/noisy classes from bad labels before balancing.
+            class_counts = news_data["Nhãn/Label"].value_counts()
+            rare_labels = class_counts[class_counts < MIN_NEWS_CLASS_SAMPLES].index.tolist()
+            if rare_labels:
+                print(
+                    f"🧪 Removing rare/noisy news labels (<{MIN_NEWS_CLASS_SAMPLES} samples): {rare_labels}"
+                )
+                news_data = news_data[~news_data["Nhãn/Label"].isin(rare_labels)].copy()
+                if len(news_data) == 0:
+                    raise ValueError(
+                        "News data became empty after filtering rare labels. Check dataset labels."
+                    )
+                print(f"   Remaining news rows after label filter: {len(news_data)}")
             # Balance data
             news_data = balance_data(news_data, "Nhãn/Label")
     else:
         print("📝 Using sample data...")
         news_data = pd.DataFrame(get_sample_news_data(), columns=['Nội Dung', 'Nhãn/Label'])
+
+    # Append very high-confidence user feedback from DB (self-learning)
+    user_news_df = load_user_feedback_data(PredictionType.NEWS, min_confidence=0.95)
+    if user_news_df is not None and not user_news_df.empty:
+        print(f"🔁 Augmenting news dataset with {len(user_news_df)} user-labelled samples.")
+        news_data = pd.concat([news_data, user_news_df], ignore_index=True)
     
     # Map labels to indices dynamically based on labels present
     unique_labels = sorted(news_data["Nhãn/Label"].unique())
@@ -706,8 +933,12 @@ def train_news_model(data=None):
         )
     else:
         print("\n⚠️  No evaluation results to compare (dataset too small).")
-    # Chọn Logistic Regression (Softmax) làm model deploy cuối cùng
-    model = news_models["Logistic Regression"]
+    # Chọn model deploy cuối cùng theo weighted F1 trên hold-out nếu có
+    selected_news_model = "Logistic Regression"
+    if results:
+        selected_news_model = max(results, key=lambda r: r["F1"])["Model"]
+        print(f"\n📐 Auto-selected best news model by weighted F1: {selected_news_model}.")
+    model = news_models[selected_news_model]
     
     # Save model (attach label_map so inference knows dynamic labels)
     model_path = models_dir / "news_model.pkl"
@@ -730,10 +961,18 @@ def train_news_model(data=None):
 if __name__ == "__main__":
     print("\n🚀 Starting Model Training...\n")
     
-    # Load data from Excel if available
+    # Load base data from Excel / CSV if available
     data = None
     if USE_EXCEL and DATASET_PATH.exists():
         data = load_data_from_excel(DATASET_PATH)
+    if USE_CSV and CSV_DATASET_PATH.exists():
+        csv_data = load_data_from_csv(CSV_DATASET_PATH)
+        if csv_data is not None:
+            if data is None:
+                data = csv_data
+            else:
+                print("🔗 Merging Excel + CSV training data")
+                data = pd.concat([data, csv_data], ignore_index=True)
     
     # Train both models
     train_spam_model(data)

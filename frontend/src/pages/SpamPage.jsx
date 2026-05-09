@@ -66,6 +66,17 @@ const HistoryItem = ({ type, title, time, confidence, onClick }) => (
   </motion.div>
 );
 
+const getConfidenceWarning = (value, text) => {
+  const trimmed = String(text || '').trim();
+  if (trimmed.length > 0 && trimmed.length < 20) {
+    return 'Nội dung quá ngắn nên độ tin cậy thấp. Hãy nhập câu đầy đủ hoặc thêm ngữ cảnh.';
+  }
+  if ((value || 0) < 0.7) {
+    return 'Độ tin cậy thấp. Cân nhắc kiểm tra thêm bằng nội dung đầy đủ hơn.';
+  }
+  return null;
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -100,6 +111,8 @@ export default function App() {
           type: isSpam ? 'SPAM' : 'SAFE',
           confidence: Math.round((item.confidence || 0) * 100),
           created_at: item.created_at,
+          source: item.source || 'manual',
+          predicted_label: item.predicted_label || (isSpam ? 'Spam' : 'Not Spam'),
         };
       });
       setHistoryItems(mapped);
@@ -160,12 +173,15 @@ export default function App() {
         const label = String(predictionForHistory.label || '').toLowerCase();
         const isSpam = label === 'spam';
         const confidence = Math.round((predictionForHistory.confidence || 0) * 100);
+        const confidenceValue = predictionForHistory.confidence || 0;
         const item = {
           id: Date.now(),
           text,
           type: isSpam ? 'SPAM' : 'SAFE',
           confidence,
           created_at: nowIso,
+          source: 'manual',
+          predicted_label: predictionForHistory.label || (isSpam ? 'Spam' : 'Not Spam'),
         };
         setHistoryItems((prev) => [item, ...prev].slice(0, 50));
       }
@@ -210,6 +226,7 @@ export default function App() {
     : 0;
   const safePercent = spamResult ? Math.max(0, 100 - spamPercent) : 0;
   const confidencePercent = spamResult ? Math.round((spamResult.confidence || 0) * 100) : 0;
+  const uiConfidenceWarning = spamResult ? getConfidenceWarning(spamResult.confidence || 0, text) : null;
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 font-['Plus_Jakarta_Sans',sans-serif] selection:bg-indigo-100 selection:text-indigo-900">
@@ -359,7 +376,7 @@ export default function App() {
                     </div>
                     <p className="text-sm text-red-800 leading-relaxed font-medium">
                       <strong className="block mb-1">Trạng thái mô hình</strong>
-                      {spamResult?.warning || 'Kết quả từ API. Nếu độ tin cậy thấp, cân nhắc huấn luyện thêm dữ liệu.'}
+                      {uiConfidenceWarning || spamResult?.warning || 'Kết quả từ API. Nếu độ tin cậy thấp, hãy nhập nội dung dài hơn để tăng tín hiệu ngữ nghĩa.'}
                     </p>
                   </div>
                 </div>

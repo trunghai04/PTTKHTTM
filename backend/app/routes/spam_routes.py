@@ -34,6 +34,8 @@ async def predict_spam(
     request: SpamRequest,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
+    use_transformer: bool = False,
+    chunk: bool = True,
 ):
     """
     Predict if text is spam or not spam
@@ -42,13 +44,27 @@ async def predict_spam(
         if not request.text or len(request.text.strip()) == 0:
             raise HTTPException(status_code=400, detail="Text cannot be empty")
         
-        # Get prediction
-        result = spam_classifier.predict(request.text)
+        # Get prediction (classic TF-IDF model or transformer-based model)
+        if use_transformer:
+            from app.services.transformer_spam_service import transformer_spam_classifier
+            result = transformer_spam_classifier.predict(request.text)
+        else:
+            # For long inputs, chunk+aggregate improves stability.
+            if chunk and len(request.text) >= 400:
+                result = spam_classifier.predict_long(request.text)
+            else:
+                result = spam_classifier.predict(request.text)
         
         # Add warning if confidence is low
         warning = None
-        if result.get("confidence", 0) < 0.7:
+        # Very short inputs are inherently low-signal.
+        if len(request.text.strip()) < 20:
+            warning = "Input quá ngắn nên độ tin cậy thấp. Hãy thêm ngữ cảnh để model phân loại ổn định hơn."
+        elif result.get("confidence", 0) < 0.7:
             warning = f"Low confidence prediction ({result['confidence']:.1%}). Model may need more training data."
+        if isinstance(result.get("warning"), str):
+            # Preserve service-level warnings (e.g. chunked aggregation).
+            warning = f"{warning} {result['warning']}".strip() if warning else result["warning"]
         
         # Save to database (with error handling). If user is logged in, attach user_id.
         try:

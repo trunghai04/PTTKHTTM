@@ -5,58 +5,67 @@ from pathlib import Path
 import os
 
 # Database URL from environment variable or default
-# Priority: 1. Environment variable, 2. PostgreSQL (if available), 3. SQLite (fallback)
+# Priority:
+# 1) DATABASE_URL (recommended: MySQL local)
+# 2) PostgreSQL local default
+# 3) SQLite fallback
 database_url = os.getenv("DATABASE_URL")
 
 if not database_url:
-    # Try PostgreSQL first (if psycopg2 is installed)
-    try:
-        import psycopg2
-        # Try to connect to PostgreSQL
-        database_url = "postgresql://postgres:postgres@localhost:5432/text_classification"
-        print("📦 Attempting to use PostgreSQL...")
-    except (ImportError, Exception):
-        # Fallback to SQLite (no installation needed)
-        db_path = Path(__file__).parent.parent.parent / "database.db"
-        database_url = f"sqlite:///{db_path}"
-        print(f"📦 Using SQLite database at: {db_path}")
-        print("   (SQLite doesn't require installation - perfect for development!)")
+    database_url = "postgresql://postgres:postgres@localhost:5432/text_classification"
+    print("📦 DATABASE_URL not set. Falling back to local PostgreSQL.")
 
-# Create engine with appropriate settings
-if database_url.startswith("sqlite"):
-    # SQLite settings
+
+def _create_engine_with_fallback(url: str):
+    if url.startswith("sqlite"):
+        return create_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            echo=False,
+        )
+
+    # MySQL-specific connection args
+    if url.startswith("mysql"):
+        return create_engine(
+            url,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 10},
+            pool_timeout=10,
+            pool_recycle=300,
+        )
+
+    # PostgreSQL / other SQLAlchemy-supported DBs
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={
+            "connect_timeout": 5,
+            "options": "-c statement_timeout=5000",
+        },
+        pool_timeout=5,
+        pool_recycle=300,
+    )
+
+
+try:
+    engine = _create_engine_with_fallback(database_url)
+    if database_url.startswith("mysql"):
+        print("✅ MySQL database engine created")
+    elif database_url.startswith("sqlite"):
+        print("✅ SQLite database engine created")
+    else:
+        print("✅ PostgreSQL database engine created")
+except Exception as e:
+    print(f"⚠️  Database connection failed for DATABASE_URL='{database_url}': {e}")
+    print("   Falling back to SQLite...")
+    db_path = Path(__file__).parent.parent.parent / "database.db"
+    database_url = f"sqlite:///{db_path}"
     engine = create_engine(
         database_url,
-        connect_args={"check_same_thread": False},  # SQLite specific
-        echo=False
+        connect_args={"check_same_thread": False},
+        echo=False,
     )
-    print("✅ SQLite database engine created")
-else:
-    # PostgreSQL settings
-    try:
-        engine = create_engine(
-            database_url,
-            pool_pre_ping=True,
-            connect_args={
-                "connect_timeout": 5,
-                "options": "-c statement_timeout=5000"
-            },
-            pool_timeout=5,
-            pool_recycle=300
-        )
-        print("✅ PostgreSQL database engine created")
-    except Exception as e:
-        # If PostgreSQL fails, fallback to SQLite
-        print(f"⚠️  PostgreSQL connection failed: {e}")
-        print("   Falling back to SQLite...")
-        db_path = Path(__file__).parent.parent.parent / "database.db"
-        database_url = f"sqlite:///{db_path}"
-        engine = create_engine(
-            database_url,
-            connect_args={"check_same_thread": False},
-            echo=False
-        )
-        print(f"✅ Using SQLite database at: {db_path}")
+    print(f"✅ Using SQLite database at: {db_path}")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

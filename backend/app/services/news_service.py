@@ -1,27 +1,53 @@
 """
 News Classification Service
 
-Mathematical Implementation using Softmax:
+Baseline: Softmax over TF-IDF features (logistic regression).
 
-Step 1: Calculate linear scores for each class
-    z_j = w_j^T * x + b_j  (for j = 1 to 5)
-    where:
-    - w_j: weight vector for class j
-    - x: TF-IDF feature vector
-    - b_j: bias term for class j
-
-Step 2: Apply Softmax function
-    P(y=j|x) = e^(z_j) / Σ(k=1 to 5) e^(z_k)
-    
-    This normalizes scores to probabilities that sum to 1
-
-Step 3: Predict class with highest probability
-    y^ = argmax_j P(y=j|x)
+Extension: we also kiểm tra tỉ lệ từ khóa theo từng chủ đề:
+- Với mỗi chủ đề tin tức, định nghĩa một bộ từ khóa tiêu biểu.
+- Khi dự đoán:
+  1. Làm sạch + tách token câu.
+  2. Đếm bao nhiêu token thuộc bộ từ khóa của từng chủ đề.
+  3. Tính phần trăm (ratio) của mỗi chủ đề trên tổng số token.
+- Nếu model softmax tự tin thấp nhưng một chủ đề chiếm tỉ lệ từ khóa
+  rõ ràng vượt trội, ta có thể dùng chủ đề đó làm quyết định cuối cùng.
 """
 import pickle
 import os
 from pathlib import Path
-from app.utils.preprocess import clean_text
+from app.utils.preprocess import clean_text, tokenize
+
+# Bộ từ khóa đơn giản cho từng chủ đề.
+# Có thể mở rộng/tinh chỉnh thêm theo dữ liệu thực tế.
+TOPIC_KEYWORDS = {
+    "Thể thao": {
+        "bóng", "bóng đá", "bóng rổ", "bàn thắng", "ghi bàn", "trận đấu",
+        "cầu thủ", "huấn luyện viên", "chung kết", "giải đấu", "world cup",
+        "olympic", "vđv", "vận động viên", "tỷ số", "bảng xếp hạng",
+    },
+    "Chính trị": {
+        "quốc hội", "chính phủ", "nghị định", "thông tư", "bộ trưởng",
+        "chủ tịch", "lãnh đạo", "bầu cử", "hiệp định", "ngoại giao",
+        "chính sách", "đối ngoại", "ủy ban", "đại biểu", "hội nghị",
+    },
+    "Kinh tế": {
+        "kinh tế", "gdp", "tăng trưởng", "lạm phát", "doanh nghiệp",
+        "đầu tư", "chứng khoán", "thị trường", "cổ phiếu", "trái phiếu",
+        "ngân hàng", "lãi suất", "xuất khẩu", "nhập khẩu", "doanh thu",
+        "lợi nhuận", "thương mại", "tài chính",
+    },
+    "Công nghệ": {
+        "công nghệ", "ai", "trí tuệ nhân tạo", "blockchain", "5g",
+        "phần mềm", "phần cứng", "ứng dụng", "app", "máy tính",
+        "điện thoại", "smartphone", "mạng xã hội", "internet", "cloud",
+        "điện toán đám mây", "dữ liệu lớn", "big data", "startup",
+    },
+    "Giải trí": {
+        "ca sĩ", "diễn viên", "bộ phim", "phim", "showbiz", "giải thưởng",
+        "lễ hội", "âm nhạc", "bài hát", "album", "concert", "liveshow",
+        "truyền hình", "gameshow", "nghệ sĩ", "ngôi sao",
+    },
+}
 
 class NewsClassifier:
     def __init__(self):
@@ -123,7 +149,21 @@ class NewsClassifier:
         
         # Step 1: Preprocess text
         cleaned_text = clean_text(text)
-        
+        tokens = tokenize(cleaned_text)
+
+        # Phân tích từ khóa theo từng chủ đề
+        topic_counts: dict[str, int] = {label: 0 for label in self.label_map.values()}
+        for token in tokens:
+            for topic_label, keywords in TOPIC_KEYWORDS.items():
+                if token in keywords:
+                    topic_counts[topic_label] = topic_counts.get(topic_label, 0) + 1
+
+        total_tokens = len(tokens) if tokens else 1
+        topic_percentages: dict[str, float] = {
+            topic_label: count / total_tokens
+            for topic_label, count in topic_counts.items()
+        }
+
         # Step 2: Vectorize using TF-IDF
         # Converts text to numerical feature vector x
         text_vector = self.vectorizer.transform([cleaned_text])
@@ -134,17 +174,43 @@ class NewsClassifier:
         # - Softmax probabilities: P(y=j|x) = e^(z_j) / Σe^(z_k)
         prediction = self.model.predict(text_vector)[0]
         probability = self.model.predict_proba(text_vector)[0]
-        
+
         # Step 5: Get confidence (maximum probability from Softmax)
         # This is the probability of the predicted class
         confidence = float(max(probability))
-        
+
         # Map prediction index to label name (dynamic label_map if available)
-        label = self.label_map.get(int(prediction), "Unknown")
-        
+        ml_label = self.label_map.get(int(prediction), "Unknown")
+
+        # Kết hợp softmax + heuristic dựa trên tỉ lệ từ khóa:
+        # - Nếu model tự tin thấp
+        # - Và một chủ đề có tỉ lệ từ khóa cao, khác với ml_label
+        #   → ưu tiên dùng chủ đề đó.
+        final_label = ml_label
+        final_confidence = confidence
+
+        if topic_percentages:
+            # Chủ đề có tỉ lệ từ khóa cao nhất
+            keyword_topic, keyword_ratio = max(
+                topic_percentages.items(), key=lambda kv: kv[1]
+            )
+
+            # Ngưỡng có thể chỉnh: tỉ lệ từ khóa & độ tự tin model
+            LOW_CONF_THRESHOLD = 0.60     # softmax < 0.6 coi là chưa tự tin
+            STRONG_TOPIC_RATIO = 0.30     # ≥30% token rơi vào 1 chủ đề
+
+            if (
+                keyword_ratio >= STRONG_TOPIC_RATIO
+                and keyword_topic != ml_label
+                and confidence < LOW_CONF_THRESHOLD
+            ):
+                final_label = keyword_topic
+                # Dùng max(confidence, keyword_ratio) làm confidence xấp xỉ
+                final_confidence = max(confidence, float(keyword_ratio))
+
         return {
-            "label": label,
-            "confidence": round(confidence, 4)
+            "label": final_label,
+            "confidence": round(final_confidence, 4)
         }
 
 # Global instance
