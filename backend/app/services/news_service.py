@@ -47,6 +47,11 @@ TOPIC_KEYWORDS = {
         "lễ hội", "âm nhạc", "bài hát", "album", "concert", "liveshow",
         "truyền hình", "gameshow", "nghệ sĩ", "ngôi sao",
     },
+    "Y tế": {
+        "y tế", "sức khỏe", "bệnh", "bệnh viện", "dịch", "cúm", "vaccine",
+        "vắc xin", "khám", "điều trị", "bác sĩ", "thuốc", "tiêm phòng",
+        "phòng bệnh", "virus", "sốt", "phẫu thuật", "đại dịch",
+    },
 }
 
 class NewsClassifier:
@@ -61,7 +66,8 @@ class NewsClassifier:
             1: "Chính trị",
             2: "Kinh tế",
             3: "Công nghệ",
-            4: "Giải trí"
+            4: "Giải trí",
+            5: "Y tế"
         }
         self.label_map = self.default_label_map
         # Try to load model on init
@@ -74,12 +80,12 @@ class NewsClassifier:
         try:
             self.load_model()
             self._model_loaded = True
-            print("✅ News model loaded successfully")
+            print("News model loaded successfully")
         except FileNotFoundError as e:
-            print(f"⚠️  News model not found: {e}")
+            print(f"News model not found: {e}")
             self._model_loaded = False
         except Exception as e:
-            print(f"⚠️  Warning: Could not load news model: {e}")
+            print(f"Warning: Could not load news model: {e}")
             self._model_loaded = False
     
     def load_model(self):
@@ -114,7 +120,7 @@ class NewsClassifier:
                 self.label_map = {int(k): v for k, v in model_label_map.items()}
             else:
                 self.label_map = self.default_label_map
-            print(f"📦 Loaded news model from: {model_path}")
+            print(f"Loaded news model from: {model_path}")
         else:
             raise FileNotFoundError(
                 f"News model files not found. Searched in: {[str(p) for p in possible_paths]}. "
@@ -143,9 +149,22 @@ class NewsClassifier:
             # Try loading one more time
             self._try_load_model()
             if not self.model or not self.vectorizer:
-                raise FileNotFoundError(
-                    "News model not loaded. Please train the model first by running: python train_model.py"
-                )
+                # Fallback: train once on demand so the app remains usable
+                try:
+                    from train_model import load_dataset, train_news
+
+                    data = load_dataset()
+                    train_news(data)
+                    self._model_loaded = False
+                    self._try_load_model()
+                except Exception as train_err:
+                    raise FileNotFoundError(
+                        "News model not loaded. Please train the model first by running: python train_model.py"
+                    ) from train_err
+                if not self.model or not self.vectorizer:
+                    raise FileNotFoundError(
+                        "News model not loaded. Please train the model first by running: python train_model.py"
+                    )
         
         # Step 1: Preprocess text
         cleaned_text = clean_text(text)
@@ -153,6 +172,9 @@ class NewsClassifier:
 
         # Phân tích từ khóa theo từng chủ đề
         topic_counts: dict[str, int] = {label: 0 for label in self.label_map.values()}
+        # Allow heuristics to consider topics not present in the trained model.
+        for extra_topic in TOPIC_KEYWORDS.keys():
+            topic_counts.setdefault(extra_topic, 0)
         for token in tokens:
             for topic_label, keywords in TOPIC_KEYWORDS.items():
                 if token in keywords:
@@ -184,20 +206,33 @@ class NewsClassifier:
 
         # Kết hợp softmax + heuristic dựa trên tỉ lệ từ khóa:
         # - Nếu model tự tin thấp
-        # - Và một chủ đề có tỉ lệ từ khóa cao, khác với ml_label
+        # - Hoặc câu có tín hiệu chủ đề rất rõ (ví dụ "Bộ Y tế", "cúm mùa")
         #   → ưu tiên dùng chủ đề đó.
         final_label = ml_label
         final_confidence = confidence
 
-        if topic_percentages:
+        raw_text = (text or "").lower()
+        strong_topic_overrides = [
+            ("Y tế", ["bộ y tế", "sức khỏe", "cúm mùa", "tiêm phòng", "bệnh viện", "dịch bệnh", "vaccine", "vắc xin", "bác sĩ", "điều trị"]),
+            ("Công nghệ", ["trí tuệ nhân tạo", "blockchain", "điện toán đám mây", "dữ liệu lớn", "startup", "phần mềm", "phần cứng", "5g"]),
+            ("Thể thao", ["bóng đá", "bàn thắng", "trận đấu", "cầu thủ", "world cup", "olympic"]),
+            ("Chính trị", ["quốc hội", "chính phủ", "bộ trưởng", "nghị định", "thông tư"]),
+        ]
+        for topic, phrases in strong_topic_overrides:
+            if any(phrase in raw_text for phrase in phrases):
+                final_label = topic
+                final_confidence = max(confidence, 0.80)
+                break
+
+        if final_label == ml_label and topic_percentages:
             # Chủ đề có tỉ lệ từ khóa cao nhất
             keyword_topic, keyword_ratio = max(
                 topic_percentages.items(), key=lambda kv: kv[1]
             )
 
             # Ngưỡng có thể chỉnh: tỉ lệ từ khóa & độ tự tin model
-            LOW_CONF_THRESHOLD = 0.60     # softmax < 0.6 coi là chưa tự tin
-            STRONG_TOPIC_RATIO = 0.30     # ≥30% token rơi vào 1 chủ đề
+            LOW_CONF_THRESHOLD = 0.72     # softmax < 0.72 coi là chưa tự tin
+            STRONG_TOPIC_RATIO = 0.18     # ≥18% token rơi vào 1 chủ đề
 
             if (
                 keyword_ratio >= STRONG_TOPIC_RATIO

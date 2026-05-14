@@ -18,7 +18,7 @@ export default function Docs() {
           </h1>
           <p className="mt-3 text-slate-600 text-sm md:text-base max-w-2xl">
             Tóm tắt cách hệ thống hoạt động, kiến trúc mô hình, và hướng dẫn sử dụng các trang
-            Spam Email, Tin tức và quét Gmail.
+            Spam, Tin tức và quét Gmail.
           </p>
         </header>
 
@@ -35,7 +35,7 @@ export default function Docs() {
           </p>
           <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1">
             <li>
-              <strong>Spam Email</strong>: phân loại nội dung email thành <strong>Spam</strong> hoặc{' '}
+              <strong>Spam</strong>: phân loại nội dung thành <strong>Spam</strong> hoặc{' '}
               <strong>Not Spam</strong> bằng mô hình Naive Bayes / Logistic Regression với TF‑IDF.
             </li>
             <li>
@@ -56,18 +56,35 @@ export default function Docs() {
               Văn bản được tiền xử lý bằng hàm <code className="font-mono">clean_text</code>{' '}
               (lowercase, bỏ URL, email, ký tự đặc biệt) rồi chuyển sang vector TF‑IDF.
             </p>
-            <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1">
+            <ul className="list-disc pl-5 text-sm text-slate-600 space-y-4">
               <li>
                 <strong>Naive Bayes</strong>:
-                <span className="ml-1">
-                  \(\hat y = \arg\max\_c P(c)\prod\_i P(w\_i\mid c)\)
-                </span>
+                <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 shadow-sm overflow-x-auto">
+                  <div className="min-w-max text-center text-2xl md:text-3xl font-serif italic text-slate-900 whitespace-nowrap">
+                    ŷ = argmax<sub className="align-sub text-[0.72em]">c<sub className="align-sub text-[0.72em]">j</sub></sub> P(c<sub className="align-sub text-[0.72em]">j</sub>) ∏ P(x<sub className="align-sub text-[0.72em]">i</sub>|c<sub className="align-sub text-[0.72em]">j</sub>)
+                  </div>
+                </div>
+                <p className="mt-2 text-slate-600">
+                  Nghĩa là ta chọn lớp <code className="font-mono">c_j</code> có giá trị lớn nhất
+                  của tích giữa xác suất tiên nghiệm <code className="font-mono">P(c_j)</code> và
+                  xác suất có điều kiện của các đặc trưng <code className="font-mono">P(x_i|c_j)</code>.
+                </p>
               </li>
               <li>
                 <strong>Logistic Regression</strong>:
-                <span className="ml-1">
-                  \(P(y=1\mid x) = \sigma(w^T x + b)\), với ngưỡng quyết định tối ưu F1.
-                </span>
+                <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 shadow-sm">
+                  <div className="text-center text-2xl md:text-3xl font-serif italic text-slate-900 leading-relaxed">
+                    <div className="whitespace-nowrap">
+                      P(y = 1 | x) = σ(w^T x + b)
+                    </div>
+                    <div className="mt-3 whitespace-nowrap">
+                      σ(z) = <span className="inline-flex flex-col items-center align-middle mx-1 text-center leading-none"><span className="border-b border-current px-1 pb-1">1</span><span className="px-1 pt-1">1 + e<sup>−z</sup></span></span>
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-2 text-slate-600">
+                  Mô hình dự đoán spam khi xác suất vượt qua ngưỡng quyết định tối ưu theo F1.
+                </p>
               </li>
             </ul>
           </div>
@@ -98,15 +115,32 @@ Response:
               <Newspaper className="text-indigo-500" />
               Phân loại Tin tức
             </h2>
-            <p className="text-sm text-slate-600">
-              Mô hình sử dụng Logistic Regression đa lớp với Softmax, nghĩa là xác suất cho mỗi lớp j
-              được tính bằng: P(y = j | x) = exp(z_j) / ∑_k exp(z_k), với z_j = w_j^T x + b_j và nhãn
-              dự đoán là lớp có xác suất lớn nhất.
-            </p>
-            <p className="text-sm text-slate-600">
-              Vector TF‑IDF dùng n‑gram (1–3) và bộ stopwords tiếng Việt để giữ lại cụm từ quan
-              trọng.
-            </p>
+            <div className="text-sm text-slate-600">
+              <p>
+                Mô hình sử dụng Logistic Regression đa lớp với Softmax. Xác suất của mỗi lớp
+                <code className="font-mono">c_j</code> được tính theo công thức sau.
+              </p>
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 shadow-sm overflow-x-auto">
+                <div className="min-w-max text-center text-2xl md:text-3xl font-serif italic text-slate-900 leading-relaxed whitespace-nowrap">
+                  <div>P(y = c<sub className="align-sub text-[0.72em]">j</sub> | x) = e<sup>z<sub className="align-sub text-[0.72em]">j</sub></sup> / Σ e<sup>z<sub className="align-sub text-[0.72em]">k</sub></sup></div>
+                  <div className="mt-3">z<sub className="align-sub text-[0.72em]">j</sub> = w<sub className="align-sub text-[0.72em]">j</sub><sup>T</sup> x + b<sub className="align-sub text-[0.72em]">j</sub></div>
+                </div>
+              </div>
+              <p className="mt-3">
+                Nhãn dự đoán cuối cùng là lớp có xác suất lớn nhất.
+              </p>
+            </div>
+            <div className="text-sm text-slate-600">
+              <p>
+                Vector TF‑IDF dùng n‑gram (1–3) và bộ stopwords tiếng Việt để giữ lại cụm từ quan
+                trọng.
+              </p>
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 shadow-sm overflow-x-auto">
+                <div className="min-w-max text-center text-2xl md:text-3xl font-serif italic text-slate-900 leading-relaxed whitespace-nowrap">
+                  P(y = c<sub className="align-sub text-[0.72em]">j</sub> | x) = e<sup>z<sub className="align-sub text-[0.72em]">j</sub></sup> / Σ e<sup>z<sub className="align-sub text-[0.72em]">k</sub></sup>
+                </div>
+              </div>
+            </div>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs font-mono text-slate-700 space-y-2">
             <div className="font-bold text-slate-900 mb-1">Ví dụ request API</div>

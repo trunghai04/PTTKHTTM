@@ -15,16 +15,16 @@ import threading
 import time
 from pathlib import Path
 
-# Configure logging
+# Cấu hình logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create database tables (with error handling)
+# Tạo bảng database (có xử lý lỗi)
 try:
     Base.metadata.create_all(bind=engine)
-    logger.info("Database tables created successfully")
+    logger.info("Đã tạo bảng database thành công")
 except Exception as e:
-    logger.warning(f"Could not create database tables (this is OK if DB is not available): {e}")
+    logger.warning(f"Không thể tạo bảng database (vẫn ổn nếu DB chưa sẵn sàng): {e}")
 
 # Migration: add new columns if tables existed before schema update
 def _run_migrations():
@@ -33,12 +33,15 @@ def _run_migrations():
     with engine.connect() as conn:
         dialect = engine.dialect.name
 
-        # 1) predictions table: user_id + source + email metadata
+        # 1) Bảng predictions: user_id + source + metadata email + luồng duyệt
         for col_name, col_type in [
             ("user_id", "INTEGER"),
             ("source", "VARCHAR(50)"),
             ("email_subject", "VARCHAR(500)"),
             ("email_snippet", "VARCHAR(500)"),
+            ("review_status", "VARCHAR(50)"),
+            ("reviewed_label", "VARCHAR(255)"),
+            ("reviewed_at", "TIMESTAMP"),
         ]:
             try:
                 if dialect == "postgresql":
@@ -57,7 +60,7 @@ def _run_migrations():
                 if "already exists" not in err_str and "duplicate" not in err_str:
                     raise
 
-        # 2) users table: Google OAuth columns + avatar
+        # 2) Bảng users: cột Google OAuth + avatar
         for col_name, col_type in [
             ("google_id", "VARCHAR(255)"),
             ("google_refresh_token", "TEXT"),
@@ -88,6 +91,31 @@ try:
 except Exception as e:
     logger.warning(f"Migration skipped (OK if columns exist): {e}")
 
+
+def _normalize_user_roles():
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        dialect = engine.dialect.name
+        try:
+            if dialect == "postgresql":
+                conn.execute(
+                    text("UPDATE users SET role = lower(role) WHERE role IN ('USER', 'ADMIN')")
+                )
+            else:
+                conn.execute(
+                    text("UPDATE users SET role = LOWER(role) WHERE role IN ('USER', 'ADMIN')")
+                )
+        except Exception as role_err:
+            logger.warning(f"Could not normalize user roles (OK if already normalized): {role_err}")
+
+
+try:
+    _normalize_user_roles()
+    logger.info("User roles normalized")
+except Exception as e:
+    logger.warning(f"Role normalization skipped: {e}")
+
 app = FastAPI(
     title="BloopAI API",
     description="API for Spam and News Classification",
@@ -95,9 +123,16 @@ app = FastAPI(
 )
 
 # CORS middleware
+# Keep localhost dev ports and any comma-separated origins from env.
 allowed_origins = [
     "http://localhost:3000",
+    "http://localhost:3004",
     "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3004",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
     "https://bloopai.bloop.io.vn",
 ]
 extra_cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
@@ -106,8 +141,10 @@ if extra_cors_origins:
         [origin.strip() for origin in extra_cors_origins.split(",") if origin.strip()]
     )
 
+# Allow local dev by regex too so alternate ports don't cause CORS failures.
 app.add_middleware(
     CORSMiddleware,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\\d+)?$",
     allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
@@ -175,7 +212,7 @@ def _auto_train_loop():
                         import pandas as pd
                         base_data = pd.concat([base_data, csv_data], ignore_index=True)
 
-            # train_spam_model / train_news_model đã tự nối thêm dữ liệu người dùng
+            # Chỉ train từ dữ liệu đã xác nhận để tránh học sai từ prediction chưa duyệt.
             train_spam_model(base_data)
             train_news_model(base_data)
 

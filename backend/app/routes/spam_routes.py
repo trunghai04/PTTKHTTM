@@ -29,12 +29,34 @@ class SpamBulkResponse(BaseModel):
     spam_count: int
     not_spam_count: int
 
+def _predict_spam_with_best_available_model(text: str, *, prefer_transformer: bool = True, chunk: bool = True):
+    """Predict with transformer first when available, otherwise fall back to the classic model."""
+    if prefer_transformer:
+        try:
+            from app.services.transformer_spam_service import transformer_spam_classifier
+
+            result = transformer_spam_classifier.predict(text)
+            if result:
+                result["model_used"] = "transformer"
+                return result
+        except Exception as e:
+            # Fall back to the classic model when transformer runtime/model is unavailable.
+            print(f"⚠️ Transformer prediction unavailable, falling back to classic model: {e}")
+
+    if chunk and len(text) >= 400:
+        result = spam_classifier.predict_long(text)
+    else:
+        result = spam_classifier.predict(text)
+    result["model_used"] = "classic"
+    return result
+
+
 @router.post("/predict", response_model=SpamResponse)
 async def predict_spam(
     request: SpamRequest,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
-    use_transformer: bool = False,
+    use_transformer: bool = True,
     chunk: bool = True,
 ):
     """
@@ -44,16 +66,12 @@ async def predict_spam(
         if not request.text or len(request.text.strip()) == 0:
             raise HTTPException(status_code=400, detail="Text cannot be empty")
         
-        # Get prediction (classic TF-IDF model or transformer-based model)
-        if use_transformer:
-            from app.services.transformer_spam_service import transformer_spam_classifier
-            result = transformer_spam_classifier.predict(request.text)
-        else:
-            # For long inputs, chunk+aggregate improves stability.
-            if chunk and len(request.text) >= 400:
-                result = spam_classifier.predict_long(request.text)
-            else:
-                result = spam_classifier.predict(request.text)
+        # Prefer the transformer model when available because it handles richer user input better.
+        result = _predict_spam_with_best_available_model(
+            request.text,
+            prefer_transformer=use_transformer,
+            chunk=chunk,
+        )
         
         # Add warning if confidence is low
         warning = None
@@ -65,6 +83,8 @@ async def predict_spam(
         if isinstance(result.get("warning"), str):
             # Preserve service-level warnings (e.g. chunked aggregation).
             warning = f"{warning} {result['warning']}".strip() if warning else result["warning"]
+        if result.get("model_used"):
+            warning = f"{warning} Model: {result['model_used']}.".strip() if warning else f"Model: {result['model_used']}."
         
         # Save to database (with error handling). If user is logged in, attach user_id.
         try:
@@ -75,6 +95,7 @@ async def predict_spam(
                 confidence=result["confidence"],
                 user_id=user.id if user else None,
                 source="manual",
+                review_status="pending",
             )
             db.add(prediction)
             db.commit()

@@ -25,8 +25,8 @@ RUN mkdir -p app/models
 # Expose port
 EXPOSE 8000
 
-# Run training script first (optional, can be done separately)
-# RUN python train_model.py
+# Train models during image build so the API starts with ready-to-use artifacts.
+RUN python train_model.py
 
 # Start server
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

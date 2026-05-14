@@ -94,7 +94,7 @@ const Navbar = () => {
                 </div>
               </button>
               {isAvatarMenuOpen && (
-                <div className="absolute right-0 mt-2 w-40 bg-white border border-slate-200 rounded-xl shadow-lg py-2 z-50">
+                <div className="absolute right-0 mt-2 w-48 bg-white border border-slate-200 rounded-xl shadow-lg py-2 z-50">
                   {isAdmin && (
                     <button
                       type="button"
@@ -105,6 +105,18 @@ const Navbar = () => {
                       className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
                     >
                       Bảng điều khiển
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAvatarMenuOpen(false);
+                        navigate('/admin/reviews');
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-indigo-700 hover:bg-indigo-50"
+                    >
+                      Duyệt AI
                     </button>
                   )}
                   <button
@@ -155,28 +167,36 @@ const Navbar = () => {
             Lịch sử quét
           </Link>
           {currentUser && isAdmin ? (
-            <Link
-              to="/dashboard"
-              className="bg-text-charcoal text-white px-6 py-3 rounded-xl font-semibold text-center flex items-center justify-center gap-2"
-            >
-              <div className="w-8 h-8 rounded-full overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
-                {currentUser.avatar_url ? (
-                  <img
-                    src={currentUser.avatar_url}
-                    alt={currentUser.name || currentUser.email}
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <span className="text-xs font-bold text-slate-700">
-                    {(currentUser.name || currentUser.email || '?')
-                      .charAt(0)
-                      .toUpperCase()}
-                  </span>
-                )}
-              </div>
-              <span>Bảng điều khiển</span>
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                to="/dashboard"
+                className="bg-text-charcoal text-white px-5 py-3 rounded-xl font-semibold text-center flex items-center justify-center gap-2"
+              >
+                <div className="w-8 h-8 rounded-full overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
+                  {currentUser.avatar_url ? (
+                    <img
+                      src={currentUser.avatar_url}
+                      alt={currentUser.name || currentUser.email}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <span className="text-xs font-bold text-slate-700">
+                      {(currentUser.name || currentUser.email || '?')
+                        .charAt(0)
+                        .toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                <span>Bảng điều khiển</span>
+              </Link>
+              <Link
+                to="/admin/reviews"
+                className="bg-indigo-600 text-white px-5 py-3 rounded-xl font-semibold text-center hover:bg-indigo-700 transition-colors"
+              >
+                Duyệt AI
+              </Link>
+            </div>
           ) : !currentUser ? (
             <Link
               to="/login"

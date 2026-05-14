@@ -48,25 +48,25 @@ def _get_token_from_header(authorization: str | None) -> str | None:
 
 
 def get_current_user_id(authorization: str | None = Header(default=None)) -> int:
-    """Dependency: parse JWT and return user id. Raises 401 if invalid."""
+    """Dependency: giải mã JWT và trả về user id. Báo 401 nếu không hợp lệ."""
     token = _get_token_from_header(authorization)
     if not token:
-        raise HTTPException(status_code=401, detail="Missing bearer token")
+        raise HTTPException(status_code=401, detail="Thiếu bearer token")
     try:
         payload = decode_token(token)
         return int(payload.get("sub"))
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Token không hợp lệ")
 
 
 @router.post("/register", response_model=AuthResponse)
 async def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        raise HTTPException(status_code=400, detail="Mật khẩu phải có ít nhất 6 ký tự")
 
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
-        raise HTTPException(status_code=409, detail="Email already registered")
+        raise HTTPException(status_code=409, detail="Email đã được đăng ký")
 
     user = User(
         email=payload.email,
@@ -95,9 +95,9 @@ async def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 async def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không đúng")
     if not user.hashed_password:
-        raise HTTPException(status_code=401, detail="Tài khoản đăng nhập bằng Google. Vui lòng dùng Đăng nhập với Google.")
+        raise HTTPException(status_code=401, detail="Tài khoản này đăng nhập bằng Google. Vui lòng dùng nút Đăng nhập với Google.")
     if not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -118,13 +118,13 @@ async def login(payload: LoginRequest, db: Session = Depends(get_db)):
 async def me(db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
     token = _get_token_from_header(authorization)
     if not token:
-        raise HTTPException(status_code=401, detail="Missing bearer token")
+        raise HTTPException(status_code=401, detail="Thiếu bearer token")
 
     try:
         payload = decode_token(token)
         user_id = int(payload.get("sub"))
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Token không hợp lệ")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -147,7 +147,7 @@ async def google_login():
     if not is_google_configured():
         raise HTTPException(
             status_code=503,
-            detail="Google login is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
+            detail="Chưa cấu hình đăng nhập Google. Hãy thiết lập GOOGLE_CLIENT_ID và GOOGLE_CLIENT_SECRET.",
         )
     state = secrets.token_urlsafe(32)
     url = get_google_login_url(state=state)
@@ -243,7 +243,7 @@ async def google_callback(code: str | None = None, state: str | None = None, err
             db.refresh(user)
 
         app_token = create_access_token(subject=str(user.id))
-        redirect_url = f"{FRONTEND_URL}/auth/google/callback?token={app_token}"
+        redirect_url = f"{FRONTEND_URL.rstrip('/')}/auth/google/callback?token={app_token}"
         return RedirectResponse(url=redirect_url)
     finally:
         db.close()

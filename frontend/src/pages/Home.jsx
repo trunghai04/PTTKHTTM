@@ -28,7 +28,7 @@ const Hero = () => {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-purple opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-accent-purple"></span>
             </span>
-            Động cơ NLP thế hệ mới
+            Model NLP thế hệ mới
           </div>
           
           <h1 className="text-6xl lg:text-7xl font-extrabold leading-[1.1] text-text-charcoal tracking-tight">
@@ -145,7 +145,7 @@ const Modules = () => {
   return (
     <section className="py-32 px-6 max-w-[1440px] mx-auto">
       <div className="text-center mb-20">
-        <h2 className="text-4xl font-extrabold mb-4 text-text-charcoal tracking-tight">Các mô-đun thông minh</h2>
+        <h2 className="text-4xl font-extrabold mb-4 text-text-charcoal tracking-tight">Các Model thông minh</h2>
         <p className="text-slate-500 max-w-2xl mx-auto text-lg">Các bộ máy phân loại cấp doanh nghiệp được thiết kế cho độ tin cậy và khả năng mở rộng.</p>
       </div>
       

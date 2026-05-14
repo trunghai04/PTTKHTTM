@@ -23,7 +23,16 @@ class User(Base):
     google_id = Column(String, unique=True, index=True, nullable=True)
     google_refresh_token = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
-    role = Column(Enum(UserRole), nullable=False, server_default=UserRole.USER.value)
+    role = Column(
+        Enum(
+            UserRole,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+            native_enum=False,
+            validate_strings=True,
+        ),
+        nullable=False,
+        server_default=UserRole.USER.value,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Prediction(Base):
@@ -39,6 +48,9 @@ class Prediction(Base):
     source = Column(String, nullable=True)  # 'gmail' | 'manual' | null
     email_subject = Column(String, nullable=True)
     email_snippet = Column(String, nullable=True)
+    review_status = Column(String, nullable=True)  # pending | approved | rejected
+    reviewed_label = Column(String, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
 
     def to_dict(self):
         return {
@@ -51,4 +63,7 @@ class Prediction(Base):
             "source": self.source,
             "email_subject": self.email_subject,
             "email_snippet": self.email_snippet,
+            "review_status": self.review_status,
+            "reviewed_label": self.reviewed_label,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
         }

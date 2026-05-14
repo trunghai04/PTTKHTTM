@@ -92,7 +92,6 @@ export default function App() {
   const isLoggedIn = !!localStorage.getItem('access_token');
 
   const characterCount = text.length;
-  const estimatedRisk = text.length > 0 ? Math.min(Math.floor(text.length / 10), 98) : 0;
 
   const fetchHistory = async () => {
     try {
@@ -165,8 +164,8 @@ export default function App() {
         predictionForHistory = res.data;
       }
       if (isLoggedIn) {
-        // Người dùng đã login: đồng bộ lịch sử từ server
-        await fetchHistory();
+        // Người dùng đã login: đồng bộ lịch sử từ server nhưng không để treo UI
+        fetchHistory().catch((e) => console.error(e));
       } else if (predictionForHistory) {
         // Khách: cập nhật lịch sử tạm thời trong phiên hiện tại
         const nowIso = new Date().toISOString();
@@ -186,8 +185,19 @@ export default function App() {
         setHistoryItems((prev) => [item, ...prev].slice(0, 50));
       }
     } catch (e) {
-      console.error(e);
-      setError(e?.response?.data?.detail || 'Có lỗi khi gọi API kiểm tra spam');
+      const code = e?.code || e?.name;
+      const message = String(e?.message || '').toLowerCase();
+      const isAbort =
+        code === 'ERR_CANCELED' ||
+        code === 'ECONNABORTED' ||
+        code === 'CanceledError' ||
+        message.includes('aborted') ||
+        message.includes('canceled');
+
+      if (!isAbort) {
+        console.error(e);
+        setError(e?.response?.data?.detail || 'Có lỗi khi gọi API kiểm tra spam');
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -226,6 +236,18 @@ export default function App() {
     : 0;
   const safePercent = spamResult ? Math.max(0, 100 - spamPercent) : 0;
   const confidencePercent = spamResult ? Math.round((spamResult.confidence || 0) * 100) : 0;
+  const riskLevel = !spamResult
+    ? 'low'
+    : spamPercent >= 70
+      ? 'high'
+      : spamPercent >= 40
+        ? 'medium'
+        : 'low';
+  const riskConfig = {
+    high: { label: 'Cao', colorClass: 'text-red-600', dotClass: 'bg-red-500', ringClass: 'border-red-200', bgClass: 'bg-red-50/50' },
+    medium: { label: 'Trung bình', colorClass: 'text-amber-600', dotClass: 'bg-amber-500', ringClass: 'border-amber-200', bgClass: 'bg-amber-50/50' },
+    low: { label: 'Thấp', colorClass: 'text-emerald-600', dotClass: 'bg-emerald-500', ringClass: 'border-emerald-200', bgClass: 'bg-emerald-50/50' },
+  }[riskLevel];
   const uiConfidenceWarning = spamResult ? getConfidenceWarning(spamResult.confidence || 0, text) : null;
 
   return (
@@ -270,9 +292,11 @@ export default function App() {
                         />
                       </button>
                     </div>
-                    <div className="flex items-center gap-2 px-3 py-1 bg-white/50 border border-slate-200 rounded-lg">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[10px] font-bold text-slate-600">Mức độ rủi ro: <span className="text-emerald-600">Thấp</span></span>
+                    <div className={`flex items-center gap-2 px-3 py-1 ${riskConfig.bgClass} border ${riskConfig.ringClass} rounded-lg`}>
+                      <span className={`w-2 h-2 rounded-full ${riskConfig.dotClass} animate-pulse`} />
+                      <span className="text-[10px] font-bold text-slate-600">
+                        Mức độ rủi ro: <span className={riskConfig.colorClass}>{riskConfig.label}</span>
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -293,7 +317,7 @@ export default function App() {
                       Số ký tự hiện tại: <span className="text-indigo-400">{characterCount.toLocaleString()}</span>
                     </div>
                     <div className="px-3 py-1 bg-white border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600">
-                      Ước tính rủi ro: <span className="text-indigo-600">{estimatedRisk}%</span>
+                      Ước tính rủi ro: <span className="text-indigo-600">{spamResult ? `${spamPercent}%` : '--'}</span>
                     </div>
                   </div>
                 </div>
@@ -332,8 +356,8 @@ export default function App() {
             <Card className="p-6 md:p-10 bg-white">
               <div className="flex flex-col md:flex-row items-start justify-between mb-10 gap-4">
                 <div>
-                  <h3 className="text-2xl font-extrabold text-slate-900 tracking-tight">Báo cáo quét thần kinh</h3>
-                  <p className="text-sm font-medium text-slate-500">Phân bố xác suất từ mô hình backend</p>
+                  <h3 className="text-2xl font-extrabold text-slate-900 tracking-tight">Kết quả phân tích</h3>
+                  <p className="text-sm font-medium text-slate-500">Xác suất dự đoán từ mô hình backend</p>
                 </div>
                 <div className="flex items-center gap-4 bg-slate-50 p-3 rounded-2xl border border-slate-100">
                   <div className="flex gap-1 items-end h-6 px-2">
@@ -356,7 +380,7 @@ export default function App() {
                 <div className="space-y-8">
                   <div>
                     <div className="flex justify-between items-end mb-3">
-                      <span className="text-sm font-bold text-slate-600 uppercase tracking-wider">Độ tin cậy tổng thể</span>
+                      <span className="text-sm font-bold text-slate-600 uppercase tracking-wider">Mức độ tin cậy</span>
                       <span className="text-4xl font-black text-slate-900">
                         {spamResult ? confidencePercent : '--'}
                         {spamResult && <span className="text-indigo-500 text-2xl">%</span>}
@@ -375,14 +399,19 @@ export default function App() {
                       <AlertTriangle size={20} />
                     </div>
                     <p className="text-sm text-red-800 leading-relaxed font-medium">
-                      <strong className="block mb-1">Trạng thái mô hình</strong>
-                      {uiConfidenceWarning || spamResult?.warning || 'Kết quả từ API. Nếu độ tin cậy thấp, hãy nhập nội dung dài hơn để tăng tín hiệu ngữ nghĩa.'}
+                      <strong className="block mb-1">Nguồn mô hình</strong>
+                      <span className="inline-flex items-center gap-2 flex-wrap">
+                        <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-black uppercase tracking-wider">
+                          Classic
+                        </span>
+                        <span>{uiConfidenceWarning || spamResult?.warning || 'Kết quả từ mô hình backend. Nếu độ tin cậy thấp, hãy nhập nội dung dài hơn để tăng tín hiệu ngữ nghĩa.'}</span>
+                      </span>
                     </p>
                   </div>
                 </div>
 
                 <div className="space-y-6">
-                  <span className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Ma trận xác suất</span>
+                  <span className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">xác suất</span>
                   <div className="space-y-5">
                     <div className="relative bg-slate-50 p-4 rounded-2xl border border-slate-100">
                       <div className="flex justify-between text-sm mb-2">

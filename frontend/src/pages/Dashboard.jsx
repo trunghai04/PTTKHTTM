@@ -252,8 +252,8 @@ export default function App() {
         {/* Header */}
         <header className="flex flex-col md:flex-row justify-between items-start md:items-end mb-10 gap-4">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight text-slate-900">Phân Tích Cao Cấp</h1>
-            <p className="text-slate-500 mt-2 font-medium">Thống kê từ backend</p>
+            <h1 className="text-4xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+            <p className="text-slate-500 mt-2 font-medium">Thống kê dữ liệu</p>
           </div>
           {error && (
             <p className="text-sm font-semibold text-red-600">{error}</p>
@@ -384,7 +384,7 @@ export default function App() {
           >
             <div className="flex justify-between items-center mb-8">
               <h3 className="text-xl font-bold text-slate-800">Tỉ lệ Phát hiện</h3>
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Quét thời gian thực</div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Đã Quét</div>
             </div>
             <div className="flex flex-col sm:flex-row items-center justify-between gap-8">
               <div className="relative w-48 h-48">

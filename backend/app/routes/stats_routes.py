@@ -1,8 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
+from app.auth.deps import get_current_user
 from app.database.db import get_db
-from app.database.models import Prediction, PredictionType
+from app.database.models import Prediction, PredictionType, User, UserRole
+
+
+class ReviewDecision(BaseModel):
+    reviewed_label: str | None = None
+    approve: bool = True
 
 router = APIRouter()
 
@@ -123,6 +130,51 @@ async def get_monthly_timeline(db: Session = Depends(get_db)):
         )
 
     return result
+
+@router.get("/reviews")
+async def get_reviews(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    status: str = "pending",
+    limit: int = 100,
+):
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    review_status = status.strip().lower()
+    query = db.query(Prediction)
+    if review_status != "all":
+        if review_status not in {"pending", "approved", "rejected"}:
+            raise HTTPException(status_code=400, detail="status must be one of: pending, approved, rejected, all")
+        query = query.filter(Prediction.review_status == review_status)
+
+    rows = query.order_by(Prediction.created_at.desc()).limit(limit).all()
+    return [row.to_dict() for row in rows]
+
+
+@router.post("/predictions/{prediction_id}/review")
+async def review_prediction(
+    prediction_id: int,
+    payload: ReviewDecision,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
+    if not prediction:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    prediction.review_status = "approved" if payload.approve else "rejected"
+    prediction.reviewed_label = payload.reviewed_label if payload.approve else None
+    prediction.reviewed_at = func.now()
+    if payload.approve and payload.reviewed_label:
+        prediction.predicted_label = payload.reviewed_label
+    db.commit()
+    db.refresh(prediction)
+    return prediction.to_dict()
+
 
 @router.get("/timeline")
 async def get_timeline(db: Session = Depends(get_db), range: str = "month", limit: int = 12):

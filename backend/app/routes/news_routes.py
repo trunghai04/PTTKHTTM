@@ -31,16 +31,16 @@ async def predict_news(
     user: User | None = Depends(get_optional_user),
 ):
     """
-    Predict news category
+    Dự đoán chủ đề tin tức
     """
     try:
         if not request.text or len(request.text.strip()) == 0:
-            raise HTTPException(status_code=400, detail="Text cannot be empty")
+            raise HTTPException(status_code=400, detail="Nội dung không được để trống")
         
-        # Get prediction
+        # Lấy kết quả dự đoán
         result = news_classifier.predict(request.text)
         
-        # Save to database (with error handling). If user is logged in, attach user_id.
+        # Lưu vào database (có xử lý lỗi). Nếu người dùng đã đăng nhập thì gắn user_id.
         try:
             prediction = Prediction(
                 text=request.text,
@@ -49,13 +49,14 @@ async def predict_news(
                 confidence=result["confidence"],
                 user_id=user.id if user else None,
                 source="manual",
+                review_status="pending",
             )
             db.add(prediction)
             db.commit()
             db.refresh(prediction)
             prediction_id = prediction.id
         except Exception as db_error:
-            # If DB fails, still return prediction but without ID
+            # Nếu DB lỗi thì vẫn trả kết quả nhưng không có ID
             db.rollback()
             prediction_id = None
         

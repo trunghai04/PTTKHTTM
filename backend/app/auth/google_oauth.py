@@ -1,9 +1,14 @@
 """
-Google OAuth2 + Gmail API helpers.
-Set env: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, FRONTEND_URL (e.g. http://localhost:3000).
+Tiện ích cho Google OAuth2 + Gmail API.
+Thiết lập biến môi trường: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, FRONTEND_URL (ví dụ: http://localhost:3000).
 """
 import os
 from urllib.parse import urlencode
+
+# Google may return a broader scope set when the user has previously consented to
+# additional permissions (e.g. Gmail access). Relax scope validation so login
+# still succeeds when the returned scope is a superset of the requested scopes.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -28,7 +33,8 @@ def get_google_login_url(state: str = "") -> str:
         "response_type": "code",
         "scope": " ".join(SCOPES),
         "access_type": "offline",
-        "prompt": "consent",
+        "prompt": "select_account consent",
+        "include_granted_scopes": "true",
     }
     if state:
         params["state"] = state

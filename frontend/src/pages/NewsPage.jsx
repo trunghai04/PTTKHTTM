@@ -230,7 +230,7 @@ export default function App() {
                         <div className="waveform-bar" style={{ animationDelay: '0.4s' }}></div>
                         <div className="waveform-bar" style={{ animationDelay: '0.1s' }}></div>
                       </div>
-                      <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Đang quét thần kinh</span>
+                      <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Đang phân tích</span>
                     </div>
                   </div>
 

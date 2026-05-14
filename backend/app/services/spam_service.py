@@ -49,12 +49,12 @@ class SpamClassifier:
         try:
             self.load_model()
             self._model_loaded = True
-            print("✅ Spam model loaded successfully")
+            print("Spam model loaded successfully")
         except FileNotFoundError as e:
-            print(f"⚠️  Spam model not found: {e}")
+            print(f"Spam model not found: {e}")
             self._model_loaded = False
         except Exception as e:
-            print(f"⚠️  Warning: Could not load spam model: {e}")
+            print(f"Warning: Could not load spam model: {e}")
             self._model_loaded = False
     
     def load_model(self):
@@ -82,7 +82,7 @@ class SpamClassifier:
                 self.model = pickle.load(f)
             with open(vectorizer_path, 'rb') as f:
                 self.vectorizer = pickle.load(f)
-            print(f"📦 Loaded spam model from: {model_path}")
+            print(f"Loaded spam model from: {model_path}")
         else:
             raise FileNotFoundError(
                 f"Spam model files not found. Searched in: {[str(p) for p in possible_paths]}. "
@@ -112,9 +112,22 @@ class SpamClassifier:
             # Try loading one more time
             self._try_load_model()
             if not self.model or not self.vectorizer:
-                raise FileNotFoundError(
-                    "Spam model not loaded. Please train the model first by running: python train_model.py"
-                )
+                # Fallback: train once on demand so the app remains usable
+                try:
+                    from train_model import load_dataset, train_spam
+
+                    data = load_dataset()
+                    train_spam(data)
+                    self._model_loaded = False
+                    self._try_load_model()
+                except Exception as train_err:
+                    raise FileNotFoundError(
+                        "Spam model not loaded. Please train the model first by running: python train_model.py"
+                    ) from train_err
+                if not self.model or not self.vectorizer:
+                    raise FileNotFoundError(
+                        "Spam model not loaded. Please train the model first by running: python train_model.py"
+                    )
         
         # Step 1: Preprocess text
         cleaned_text = clean_text(text)
@@ -128,34 +141,67 @@ class SpamClassifier:
         # For Logistic Regression: Computes P(y=1|x) using sigmoid
         probability = self.model.predict_proba(text_vector)[0]
         
-        # Get probabilities for each class
-        # For binary: [P(Not Spam), P(Spam)] or [P(Spam), P(Not Spam)]
-        # Check which index is Spam
-        spam_prob = probability[1] if len(probability) > 1 else probability[0]
-        not_spam_prob = probability[0] if len(probability) > 1 else (1 - probability[0])
+        # Map probabilities by class label to avoid relying on class order.
+        classes = list(getattr(self.model, "classes_", []))
+        class_prob = {str(cls): float(probability[idx]) for idx, cls in enumerate(classes)}
+        spam_prob = class_prob.get("Spam")
+        not_spam_prob = class_prob.get("Not Spam")
+
+        # Fallback for older models or unexpected class labels.
+        if spam_prob is None or not_spam_prob is None:
+            if len(probability) > 1:
+                spam_prob = float(max(probability))
+                not_spam_prob = float(min(probability))
+            else:
+                spam_prob = float(probability[0])
+                not_spam_prob = float(1 - probability[0])
         
-        # Step 4: Apply threshold logic
-        # Use threshold to reduce false positives
-        # If spam_prob >= threshold AND spam_prob > not_spam_prob -> Spam
-        # Otherwise -> Not Spam
-        
+        # Step 4: Apply heuristic boost before thresholding.
+        spam_prob, not_spam_prob, warning = self._phishing_boost(text, float(spam_prob), float(not_spam_prob))
+
+        # Lower threshold = fewer false negatives for phishing/spam.
         if spam_prob >= self.spam_threshold and spam_prob > not_spam_prob:
             label = "Spam"
             confidence = float(spam_prob)
         else:
             label = "Not Spam"
             confidence = float(not_spam_prob)
-        
+
         # Warning for low confidence predictions
         if confidence < 0.7:
-            print(f"⚠️  Low confidence prediction ({confidence:.2%}). Consider reviewing dataset quality.")
+            print(f"Low confidence prediction ({confidence:.2%}). Consider reviewing dataset quality.")
         
-        return {
+        result = {
             "label": label,
             "confidence": round(confidence, 4),
             "spam_probability": round(float(spam_prob), 4),
             "not_spam_probability": round(float(not_spam_prob), 4)
         }
+        if warning:
+            result["warning"] = warning
+        return result
+
+    def _phishing_boost(self, text: str, spam_prob: float, not_spam_prob: float) -> tuple[float, float, str | None]:
+        """Lightweight heuristic boost for phishing-style messages."""
+        raw = (text or "").lower()
+        hits = 0
+        for hint in ("xác minh", "tạm khóa", "bảo mật", "đăng nhập", "cập nhật", "khẩn cấp", "giao dịch", "thiết bị mới", "khôi phục", "xác thực", "bộ phận hỗ trợ", "vui lòng", "truy cập", "liên kết", "đường dẫn", "thông báo", "hạn chế"):
+            if hint in raw:
+                hits += 1
+        has_url = any(u in raw for u in ("http://", "https://", "bit.ly", "tinyurl", "goo.gl", "t.co", "is.gd"))
+        if hits >= 2 and has_url:
+            spam_prob = max(spam_prob, 0.88)
+            not_spam_prob = max(0.02, 1 - spam_prob)
+            return spam_prob, not_spam_prob, "Phishing-style message detected: boosted spam score."
+        if hits >= 4:
+            spam_prob = max(spam_prob, 0.78)
+            not_spam_prob = max(0.04, 1 - spam_prob)
+            return spam_prob, not_spam_prob, "Suspicious security/account language detected."
+        if has_url and ("tài khoản" in raw or "account" in raw or "mật khẩu" in raw or "password" in raw):
+            spam_prob = max(spam_prob, 0.72)
+            not_spam_prob = max(0.08, 1 - spam_prob)
+            return spam_prob, not_spam_prob, "Account/security link detected."
+        return spam_prob, not_spam_prob, None
 
     def predict_long(
         self,
@@ -227,5 +273,5 @@ class SpamClassifier:
 # Global instance with threshold
 # Higher threshold (0.8-0.9) strongly reduces false positives
 # Lower threshold (0.5-0.6) is more sensitive but has more false positives
-SPAM_THRESHOLD = 0.85  # stricter: only very confident spam is marked Spam
+SPAM_THRESHOLD = 0.50  # aggressive: prioritize catching phishing-style spam
 spam_classifier = SpamClassifier(spam_threshold=SPAM_THRESHOLD)

@@ -10,13 +10,14 @@ import GoogleAuthCallback from './pages/GoogleAuthCallback'
 import Docs from './pages/Docs'
 import SpamDetail from './pages/SpamDetail'
 import NewsDetail from './pages/NewsDetail'
+import AdminReviews from './pages/AdminReviews'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
 import './App.css'
 
 function App() {
   return (
-    <Router>
+    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/spam" element={<SpamPage />} />
@@ -31,6 +32,14 @@ function App() {
           element={
             <AdminRoute>
               <Dashboard />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/reviews"
+          element={
+            <AdminRoute>
+              <AdminReviews />
             </AdminRoute>
           }
         />

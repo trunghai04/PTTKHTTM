@@ -38,7 +38,14 @@ services:
     volumes:
       - ./backend:/app
       - ./backend/app/models:/app/app/models
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "
+        if [ ! -f app/models/spam_model.pkl ] || [ ! -f app/models/news_model.pkl ]; then
+          echo 'Training models because artifacts are missing...' &&
+          python train_model.py;
+        fi &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
 
   trainer:
     profiles: ["trainer"]
@@ -50,6 +57,9 @@ services:
     container_name: text_classification_trainer
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/text_classification
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/auth/google/callback}
     depends_on:
       db:
         condition: service_healthy
@@ -70,7 +80,7 @@ services:
       dockerfile: Dockerfile
     container_name: text_classification_frontend
     ports:
-      - "3004:3000"
+      - "3000:3000"
     environment:
       VITE_API_URL: http://localhost:8000
     depends_on:
